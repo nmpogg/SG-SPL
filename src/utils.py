@@ -50,8 +50,9 @@ def init_weight(m):
 def load_clip_to_cpu(cfg, design_details=None):
     backbone_name = cfg.backbone
     url = clip._MODELS[backbone_name]
-    model_path = clip._download(url)
-
+    import os
+    download_root = os.path.expanduser("~/.cache/clip")
+    model_path = clip._download(url, download_root)
     try:
         # loading JIT archive
         model = torch.jit.load(model_path, map_location="cpu").eval()

@@ -48,7 +48,7 @@ if __name__ == "__main__":
     
     parser.add_argument("--lr", type=float, default=2e-5)
     parser.add_argument('--batch_size', type=int, default=32)
-    parser.add_argument('--test_batch_size', type=int, default=1024)
+    parser.add_argument('--test_batch_size', type=int, default=128)
     parser.add_argument('--epochs', type=int, default=10)
     parser.add_argument('--workers', type=int, default=2)
     parser.add_argument('--progress', type=bool, default=False)
