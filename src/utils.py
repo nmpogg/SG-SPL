@@ -69,7 +69,10 @@ def load_clip_to_cpu(cfg, design_details=None):
             "language_ctx": 0,
             "maple_length": cfg.n_ctx,
         }
-    model = clip.build_model(state_dict or model.state_dict(), design_details)
+    try:
+        model = clip.build_model(state_dict or model.state_dict(), design_details)
+    except TypeError:
+        model = clip.build_model(state_dict or model.state_dict())
 
     return model
 
