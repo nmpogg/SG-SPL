@@ -31,9 +31,9 @@ def get_datasets(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--root", type=str, default="../datasets/tuberlin", help="path to dataset")
-    parser.add_argument("--ckpt_path", type=str, default="", help="path to dataset")
-    parser.add_argument("--dataset", type=str, default="tuberlin", help="type of dataset")
+    parser.add_argument("--root", type=str, default="/data/sketchy", help="path to data")
+    parser.add_argument("--ckpt_path", type=str, default="", help="path to ckpt")
+    parser.add_argument("--dataset", type=str, default="sketchy_2", help="type of dataset")
     parser.add_argument("--output_dir", type=str, default="", help="output directory")
     parser.add_argument("--backbone", type=str, default="ViT-B/32")
     parser.add_argument("--n_ctx", type=int, default=1)
@@ -42,6 +42,9 @@ if __name__ == "__main__":
     parser.add_argument("--prec", type=str, default="fp16")
     parser.add_argument("--proportion", type=float, default=1.0)
     parser.add_argument("--lambd", type=float, default=0.1)
+    parser.add_argument("--l_ssc", type=float, default=1.0)
+    parser.add_argument("--l_x", type=float, default=0.5)
+    parser.add_argument("--ssc_dist", type=str, default="mse")
     
     parser.add_argument("--lr", type=float, default=2e-5)
     parser.add_argument('--batch_size', type=int, default=32)
@@ -52,7 +55,7 @@ if __name__ == "__main__":
     parser.add_argument('--visualize', type=bool, default=False)
     parser.add_argument('--gzs', type=bool, default=False)
     
-    parser.add_argument('--exp_name', type=str, default='SG_SPL')
+    parser.add_argument('--exp_name', type=str, default='SG_SPL_Sketchy', help='experiment name')
     
     args = parser.parse_args()
     logger = TensorBoardLogger('tb_logs', name=args.exp_name)

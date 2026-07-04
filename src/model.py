@@ -71,6 +71,12 @@ class ZS_SBIR(pl.LightningModule):
         # Precompute text anchor matrix
         self.build_text_anchor(classname)
         
+        n_seen = len(classname)
+        self.register_buffer('proto_sk', torch.zeros(n_seen, 512))
+        self.register_buffer('proto_ph', torch.zeros(n_seen, 512))
+        self.register_buffer('proto_mask', torch.zeros(n_seen, dtype=torch.bool))
+        self.ema_m = 0.9
+        
         self.val_step_outputs_sk = []
         self.val_step_outputs_ph = []
         self.saved_features = defaultdict(lambda: {"sketch": [], "photo": []})
@@ -99,6 +105,42 @@ class ZS_SBIR(pl.LightningModule):
         optimizer = torch.optim.SGD(params=self.model.parameters(), lr=self.args.lr, weight_decay=1e-3, momentum=0.9)
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer=optimizer, step_size=5, gamma=0.1)
         return [optimizer] , [scheduler]
+        
+    @torch.no_grad()
+    def update_protos(self, feats, cat_idx, which):
+        bank = self.proto_sk if which == 'sk' else self.proto_ph
+        for c in cat_idx.unique():
+            f = F.normalize(feats[cat_idx == c].mean(0), dim=-1)
+            if self.proto_mask[c]:
+                bank[c] = F.normalize(self.ema_m * bank[c] + (1 - self.ema_m) * f, dim=-1)
+            else:
+                bank[c] = f
+            self.proto_mask[c] = True
+
+    def structural_losses(self, sk_feat, img_feat, cat_idx, dist='mse', T=0.1):
+        idx = self.proto_mask.nonzero(as_tuple=True)[0]
+        if idx.numel() < 10:
+            z = torch.tensor(0., device=self.device)
+            return z, z
+            
+        Psk, Pph = self.proto_sk.clone(), self.proto_ph.clone()
+        for c in cat_idx.unique():
+            Psk[c] = F.normalize(sk_feat[cat_idx == c].mean(0), dim=-1)
+            Pph[c] = F.normalize(img_feat[cat_idx == c].mean(0), dim=-1)
+            
+        A = self.anchor_A[idx][:, idx]
+        Ssk = Psk[idx] @ Psk[idx].t()
+        Sph = Pph[idx] @ Pph[idx].t()
+        
+        if dist == 'mse':
+            loss_ssc = F.mse_loss(Ssk, A) + F.mse_loss(Sph, A)
+            loss_xmod = F.mse_loss(Ssk, Sph.detach()) + F.mse_loss(Sph, Ssk.detach())
+        else: # kl
+            kl = lambda S, R: F.kl_div(F.log_softmax(S/T, -1), F.softmax(R/T, -1), reduction='batchmean')
+            loss_ssc = kl(Ssk, A) + kl(Sph, A)
+            loss_xmod = 0.5 * (kl(Ssk, Sph.detach()) + kl(Sph, Ssk.detach()))
+            
+        return loss_ssc, loss_xmod
     
     def loss_fn(self, sk_feat, img_feat, neg_feat):
         triplet = nn.TripletMarginWithDistanceLoss(distance_function=self.distance_fn, margin=0.3)
@@ -118,8 +160,13 @@ class ZS_SBIR(pl.LightningModule):
         loss_tri = self.loss_fn(sk_feat, img_feat, neg_feat)
         loss_cls = self.classification_loss(sk_feat, img_feat, cat_idx)
         
-        loss = loss_tri + self.args.lambd * loss_cls
-        self.log('train_loss', loss, on_step=False, on_epoch=True)
+        self.update_protos(sk_feat.detach(), cat_idx, 'sk')
+        self.update_protos(img_feat.detach(), cat_idx, 'ph')
+        
+        loss_ssc, loss_xmod = self.structural_losses(sk_feat, img_feat, cat_idx, dist=self.args.ssc_dist)
+        
+        loss = loss_tri + self.args.lambd * loss_cls + self.args.l_ssc * (loss_ssc + self.args.l_x * loss_xmod)
+        self.log_dict({'tri': loss_tri, 'cls': loss_cls, 'ssc': loss_ssc, 'xmod': loss_xmod, 'train_loss': loss})
         return loss
 
     def validation_step(self, batch, batch_idx, dataloader_idx=0):

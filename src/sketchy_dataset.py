@@ -6,6 +6,7 @@ import random
 from torchvision import transforms
 from PIL import Image, ImageOps
 from src.splits import UNSEEN_CLASSES, GENERALIZED_CLASSES, VISUALIZE_CLASSES
+from src.utils import get_all_categories
 
 def normal_transform(max_size=224):
     dataset_transforms = transforms.Compose([
@@ -27,9 +28,9 @@ class TrainDataset(torch.utils.data.Dataset):
         self.all_categories = sorted(list(set(self.all_categories) - set(unseen_classes)))
         
         if self.args.use_classes != 104:
-            required_classes = list(GENERALIZED_CLASSES[self.args.dataset])
+            required_classes = list(GENERALIZED_CLASSES.get(self.args.dataset, []))
             other_classes = [c for c in self.all_categories if c not in required_classes]
-            num_extra = self.args.use_classes - len(required_classes)
+            num_extra = max(0, self.args.use_classes - len(required_classes))
             extra_classes = random.sample(other_classes, num_extra)
             
             self.all_categories = sorted(required_classes + extra_classes)
@@ -99,8 +100,8 @@ class ValidDataset(torch.utils.data.Dataset):
 
         if self.mode == 'photo':
             if getattr(self.args, 'gzs', False):
-                generalized_classes = GENERALIZED_CLASSES[self.args.dataset]
-                for category in generalized_classes:
+                seen_classes = get_all_categories(self.args, mode="train")
+                for category in seen_classes:
                     self.paths.extend(glob.glob(os.path.join(self.args.root, 'photo', category, '*')))
             
     def __getitem__(self, index):
