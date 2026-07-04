@@ -90,7 +90,7 @@ class ZS_SBIR(pl.LightningModule):
         templates = ["a photo of a {}.", "a sketch of a {}.", "a drawing of a {}.", "an image of a {}."]
         embs = []
         for c in class_names:
-            toks = clip.tokenize([t.format(c.replace('_',' ')) for t in templates]).to(device)
+            toks = clip.tokenize([t.format(c.replace('_',' ')) for t in templates])
             e = self.clip_frozen.encode_text(toks).float() # Frozen
             e = F.normalize(F.normalize(e, dim=-1).mean(0), dim=-1)
             embs.append(e)
