@@ -201,12 +201,16 @@ class SGSPLModel(pl.LightningModule):
         loss_tri = self.loss_fn(sk_feat, ph_feat, neg_feat)
 
         # ── L_cls — classification loss ───────────────────────────────────
+        # Use CLIP's learnable logit_scale matching SG_SPL_v1 (trainable, lr=1e-6)
+        # Clamp to [0, 4.6052] so scale stays in [1, 100] — prevents L_cls from
+        # exploding and overwhelming the structural losses L_SSC / L_xmod
+        logit_scale = self.clip.logit_scale.clamp(0, 4.6052).exp()
         loss_cls = classification_loss(
             sk_feat       = sk_feat,
             ph_feat       = ph_feat,
             cat_idx       = cat_idx,
             text_emb_seen = self.text_emb_seen,
-            logit_scale   = 1.0 / 0.07,
+            logit_scale   = logit_scale,
         )
 
         # ── Update EMA prototype bank (no grad) ───────────────────────────
@@ -343,6 +347,12 @@ class SGSPLModel(pl.LightningModule):
             p for name, p in self.clip.named_parameters()
             if p.requires_grad  # only LayerNorm weights are unfrozen
         ]
+
+        # Unfreeze logit_scale and add to ln group (matches SG_SPL_v1 behaviour
+        # where freeze_all_but_bn leaves logit_scale trainable at lr=1e-6)
+        self.clip.logit_scale.requires_grad_(True)
+        if self.clip.logit_scale not in ln_params:
+            ln_params.append(self.clip.logit_scale)
 
         optimizer = torch.optim.AdamW([
             {'params': prompt_params, 'lr': self.opts.lr_prompt},
