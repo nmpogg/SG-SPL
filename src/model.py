@@ -167,6 +167,8 @@ class SGSPLModel(pl.LightningModule):
             features: [B, D] — L2-normalised embeddings
         """
         prompt = self.sk_prompt if modality == 'sketch' else self.img_prompt
+        if prompt.shape[0] == 0:
+            prompt = None
         feats  = self.clip.encode_image(images, prompt=prompt)
         feats  = feats.float()                          # fp32 for stable loss
         return F.normalize(feats, dim=-1)
@@ -305,13 +307,14 @@ class SGSPLModel(pl.LightningModule):
         zs_map = zs_metrics['mAP']
         prec_k = metric_cfg['prec_k']
 
-        # Only show mAP on progress bar to prevent text wrapping/breaking
-        self.log('val/ZS_mAP', zs_map, prog_bar=True, on_epoch=True)
-        self.log(f'val/ZS_P@{prec_k}', zs_metrics[f'P@{prec_k}'], prog_bar=False, on_epoch=True)
+        self.log_dict({
+            'val/ZS_mAP':   zs_map,
+            f'val/ZS_P@{prec_k}': zs_metrics[f'P@{prec_k}'],
+        }, prog_bar=True, on_epoch=True)
 
         if zs_map > self.best_zs_map:
             self.best_zs_map = zs_map
-            self.log('val/best_ZS_mAP', self.best_zs_map, prog_bar=False)
+            self.log('val/best_ZS_mAP', self.best_zs_map, prog_bar=True)
 
         # Clear buffers
         self._val_sk_feats.clear()
