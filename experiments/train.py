@@ -94,15 +94,15 @@ def main():
     # ── 5. Callbacks ──────────────────────────────────────────────────────
     checkpoint_cb = ModelCheckpoint(
         dirpath   = os.path.join(opts.ckpt_dir, exp_tag),
-        filename  = 'epoch{epoch:03d}_ZSmAP{val/ZS_mAP:.4f}',
-        monitor   = 'val/ZS_mAP',
+        filename  = 'epoch{epoch:03d}_mAP{mAP:.4f}',
+        monitor   = 'mAP',
         mode      = 'max',
-        save_top_k = 1,
+        save_top_k = 3,
         auto_insert_metric_name = False,
     )
     lr_monitor = LearningRateMonitor(logging_interval='step')
     early_stop_cb = EarlyStopping(
-        monitor='val/ZS_mAP',
+        monitor='mAP',
         patience=3,
         mode='max',
         verbose=True,
