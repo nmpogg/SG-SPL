@@ -1,252 +1,361 @@
+"""
+SG-SPL Lightning Module
+=======================
+Structure- & Geometry-regularized Prompt Learning for ZS-SBIR.
+
+Architecture:
+  - CLIP ViT-B/32 backbone (freeze all except LayerNorm, following CLIP-AT)
+  - Two learnable prompt vectors: sk_prompt [n_prompts, D], img_prompt [n_prompts, D]
+  - Frozen CLIP copy for text anchor + L_asym_sph reference
+  - EMA prototype bank for L_SSC and L_xmod
+
+Total loss:
+  L = L_triplet
+    + λ_cls  · L_cls
+    + λ_ssc  · (L_SSC + λ_x · L_xmod)
+    + L_asym_sph  (λ_ph and λ_sk are inside asym_spherical_loss)
+"""
+
 import copy
-import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import pytorch_lightning as pl
-from torch.nn import functional as F
-from collections import defaultdict
-from torchmetrics.functional import retrieval_average_precision
 
-from src.coprompt import VisualPromptLearner
-from src.utils import load_clip_to_cpu, get_all_categories, retrieval_precision, visualize_tsne
-from src.splits import VISUALIZE_CLASSES, UNSEEN_CLASSES
+import clip as clip_module                       # our clip/ package
+from src.losses import (
+    build_text_anchor,
+    PrototypeBank,
+    classification_loss,
+    structural_losses,
+    asym_spherical_loss,
+)
+from src.eval import compute_retrieval_metrics, get_metric_config
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-def freeze_all_but_bn(m):
-    if not isinstance(m, torch.nn.LayerNorm):
-        if hasattr(m, 'weight') and m.weight is not None:
-            m.weight.requires_grad_(False)
-        if hasattr(m, 'bias') and m.bias is not None:
-            m.bias.requires_grad_(False)
+# ─────────────────────────────────────────────────────────────────────────────
+# Utility
+# ─────────────────────────────────────────────────────────────────────────────
 
-class CustomCLIP(nn.Module):
-    def __init__(self, cfg, clip_model):
+def freeze_all_but_ln(module: nn.Module):
+    """
+    Freeze every parameter except those in LayerNorm layers.
+    Matches the CLIP-AT strategy ('freeze_all_but_bn' in their code,
+    which actually checks isinstance(m, LayerNorm)).
+    """
+    for m in module.modules():
+        if not isinstance(m, nn.LayerNorm):
+            for p in m.parameters(recurse=False):
+                p.requires_grad_(False)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SGSPLModel
+# ─────────────────────────────────────────────────────────────────────────────
+
+class SGSPLModel(pl.LightningModule):
+
+    def __init__(self, opts, seen_class_names: list):
+        """
+        Args:
+            opts:              argparse namespace (from experiments/options.py)
+            seen_class_names:  list of seen (train) class name strings
+        """
         super().__init__()
-        self.cfg = cfg
-        clip_model.apply(freeze_all_but_bn)
-        self.dtype = clip_model.dtype
-        
-        self.prompt_learner_photo = VisualPromptLearner(cfg, clip_model)
-        self.prompt_learner_sketch = VisualPromptLearner(cfg, clip_model)
-        
-        self.ph_encoder = copy.deepcopy(clip_model.visual)
-        self.sk_encoder = copy.deepcopy(clip_model.visual)
-        self.logit_scale = clip_model.logit_scale
+        self.opts = opts
+        self.seen_class_names = seen_class_names
+        self.n_seen = len(seen_class_names)
 
-    def forward(self, img_tensor, type='photo'):
-        if type == 'photo':
-            prompt_learner = self.prompt_learner_photo
-            image_encoder = self.ph_encoder
-        else:
-            prompt_learner = self.prompt_learner_sketch
-            image_encoder = self.sk_encoder
-            
-        shared_ctx = prompt_learner(img_tensor.shape[0])
-        
-        # passed compound_deeper_prompts as []
-        image_features = image_encoder(
-            img_tensor.type(self.dtype), shared_ctx, []
-        )
-        image_features_normalize = F.normalize(image_features, dim=-1)
-        return image_features_normalize
+        # ── 1. CLIP backbone ──────────────────────────────────────────────
+        clip_model, _ = clip_module.load(opts.clip_model, device='cpu')
+        clip_model = clip_model.float()     # work in fp32 internally
+        freeze_all_but_ln(clip_model)
+        self.clip = clip_model
 
-class ZS_SBIR(pl.LightningModule):
-    def __init__(self, args, classname):
-        super(ZS_SBIR, self).__init__()
-        self.args = args
-        self.classname = classname
-        clip_model = load_clip_to_cpu(args)
-        
-        self.distance_fn = lambda x, y: 1.0 - F.cosine_similarity(x, y)
-        self.best_metric = 1e-3
-        
-        # Frozen branch for text anchors and geometry regularization
+        # ── 2. Frozen CLIP copy (no grad, eval always) ────────────────────
+        # deepcopy BEFORE any training modifies LayerNorm weights
         self.clip_frozen = copy.deepcopy(clip_model)
         self.clip_frozen.requires_grad_(False)
         self.clip_frozen.eval()
-        
-        self.model = CustomCLIP(cfg=args, clip_model=clip_model)
-        
-        # Precompute text anchor matrix
-        self.build_text_anchor(classname)
-        
-        n_seen = len(classname)
-        self.register_buffer('proto_sk', torch.zeros(n_seen, 512))
-        self.register_buffer('proto_ph', torch.zeros(n_seen, 512))
-        self.register_buffer('proto_mask', torch.zeros(n_seen, dtype=torch.bool))
-        self.ema_m = 0.9
-        
-        self.val_step_outputs_sk = []
-        self.val_step_outputs_ph = []
-        self.saved_features = defaultdict(lambda: {"sketch": [], "photo": []})
+
+        # ── 3. Learnable prompt tokens (CLIP-AT style) ────────────────────
+        # IMPORTANT: prompt dim = transformer INTERNAL width, NOT output embed_dim.
+        #   ViT-B/32: width=768, output=512
+        #   ViT-B/16: width=768, output=512
+        #   ViT-L/14: width=1024, output=768
+        # Infer from positional_embedding to be robust across all backbones.
+        visual_width = clip_model.visual.positional_embedding.shape[-1]
+        self.sk_prompt  = nn.Parameter(
+            torch.randn(opts.n_prompts, visual_width) * 0.02
+        )
+        self.img_prompt = nn.Parameter(
+            torch.randn(opts.n_prompts, visual_width) * 0.02
+        )
+
+        # ── 4. Triplet loss (CLIP-AT baseline) ────────────────────────────
+        self.distance_fn = lambda x, y: 1.0 - F.cosine_similarity(x, y)
+        self.loss_fn = nn.TripletMarginWithDistanceLoss(
+            distance_function=self.distance_fn,
+            margin=opts.triplet_margin,
+        )
+
+        # ── 5. EMA prototype bank ─────────────────────────────────────────
+        self.bank = PrototypeBank(
+            n_classes = self.n_seen,
+            embed_dim = opts.embed_dim,
+            momentum  = opts.ema_m,
+        )
+
+        # ── 6. Text anchor A  (built after device is known → deferred) ────
+        # Will be populated in setup() or first training_step via _ensure_anchor()
+        self.register_buffer('anchor_A',       None, persistent=False)
+        self.register_buffer('text_emb_seen',  None, persistent=False)
+        self._anchor_built = False
+
+        # ── Misc ──────────────────────────────────────────────────────────
+        self.best_zs_map  = -1.0
+        self.best_gzs_map = -1.0
+
+        # Collect ZS/GZS validation outputs across batches (Lightning 2.x)
+        self._val_sk_feats  = []
+        self._val_ph_feats  = []
+        self._val_sk_labels = []
+        self._val_ph_labels = []
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Anchor matrix (deferred — needs device)
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def _ensure_anchor(self):
+        """Build text anchor matrix on the correct device (called lazily)."""
+        if self._anchor_built:
+            return
+        text_emb, anchor_A = build_text_anchor(
+            clip_model   = self.clip_frozen,
+            class_names  = self.seen_class_names,
+            templates    = self.opts.text_templates,
+            device       = self.device,
+        )
+        self.text_emb_seen = text_emb.to(self.device)
+        self.anchor_A      = anchor_A.to(self.device)
+        # Share anchor with bank (same object)
+        self.bank.to(self.device)
+        self._anchor_built = True
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Lightning hooks
+    # ──────────────────────────────────────────────────────────────────────────
 
     def on_train_epoch_start(self):
+        # Lightning sets ALL sub-modules to train mode at epoch start.
+        # We must re-lock clip_frozen to eval so BN/LN stats don't shift.
         self.clip_frozen.eval()
 
+    # ──────────────────────────────────────────────────────────────────────────
+    # Forward: encode a batch with the prompted CLIP
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def forward(self, images: torch.Tensor, modality: str) -> torch.Tensor:
+        """
+        Encode images using the modality-specific prompt.
+
+        Args:
+            images:   [B, 3, H, W]
+            modality: 'sketch' or 'image'
+
+        Returns:
+            features: [B, D] — L2-normalised embeddings
+        """
+        prompt = self.sk_prompt if modality == 'sketch' else self.img_prompt
+        feats  = self.clip.encode_image(images, prompt=prompt)
+        feats  = feats.float()                          # fp32 for stable loss
+        return F.normalize(feats, dim=-1)
+
     @torch.no_grad()
-    def build_text_anchor(self, class_names):
-        import clip
-        templates = ["a photo of a {}.", "a sketch of a {}.", "a drawing of a {}.", "an image of a {}."]
-        embs = []
-        for c in class_names:
-            toks = clip.tokenize([t.format(c.replace('_',' ')) for t in templates])
-            e = self.clip_frozen.encode_text(toks).float() # Frozen
-            e = F.normalize(F.normalize(e, dim=-1).mean(0), dim=-1)
-            embs.append(e)
-        E = torch.stack(embs) # [C_s, 512]
-        self.register_buffer('text_emb_seen', E)
-        self.register_buffer('anchor_A', E @ E.t())
+    def _encode_frozen(self, images: torch.Tensor) -> torch.Tensor:
+        """
+        Encode with frozen (no-prompt) CLIP → used as anchor for L_asym_sph.
+        Returns L2-normalised fp32 features.
+        """
+        feats = self.clip_frozen.encode_image(images, prompt=None)
+        return F.normalize(feats.float(), dim=-1)
 
-    def forward(self, img_tensor, dtype='photo'):
-        return self.model(img_tensor, type=dtype)
-
-    def configure_optimizers(self):
-        optimizer = torch.optim.SGD(params=self.model.parameters(), lr=self.args.lr, weight_decay=1e-3, momentum=0.9)
-        scheduler = torch.optim.lr_scheduler.StepLR(optimizer=optimizer, step_size=5, gamma=0.1)
-        return [optimizer] , [scheduler]
-        
-    @torch.no_grad()
-    def update_protos(self, feats, cat_idx, which):
-        bank = self.proto_sk if which == 'sk' else self.proto_ph
-        for c in cat_idx.unique():
-            f = F.normalize(feats[cat_idx == c].mean(0), dim=-1)
-            if self.proto_mask[c]:
-                bank[c] = F.normalize(self.ema_m * bank[c] + (1 - self.ema_m) * f, dim=-1)
-            else:
-                bank[c] = f
-            self.proto_mask[c] = True
-
-    def structural_losses(self, sk_feat, img_feat, cat_idx, dist='mse', T=0.1):
-        idx = self.proto_mask.nonzero(as_tuple=True)[0]
-        if idx.numel() < 10:
-            z = torch.tensor(0., device=self.device)
-            return z, z
-            
-        Psk, Pph = self.proto_sk.clone(), self.proto_ph.clone()
-        for c in cat_idx.unique():
-            Psk[c] = F.normalize(sk_feat[cat_idx == c].mean(0), dim=-1)
-            Pph[c] = F.normalize(img_feat[cat_idx == c].mean(0), dim=-1)
-            
-        A = self.anchor_A[idx][:, idx]
-        Ssk = Psk[idx] @ Psk[idx].t()
-        Sph = Pph[idx] @ Pph[idx].t()
-        
-        if dist == 'mse':
-            loss_ssc = F.mse_loss(Ssk, A) + F.mse_loss(Sph, A)
-            loss_xmod = F.mse_loss(Ssk, Sph.detach()) + F.mse_loss(Sph, Ssk.detach())
-        else: # kl
-            kl = lambda S, R: F.kl_div(F.log_softmax(S/T, -1), F.softmax(R/T, -1), reduction='batchmean')
-            loss_ssc = kl(Ssk, A) + kl(Sph, A)
-            loss_xmod = 0.5 * (kl(Ssk, Sph.detach()) + kl(Sph, Ssk.detach()))
-            
-        return loss_ssc, loss_xmod
-    
-    def loss_fn(self, sk_feat, img_feat, neg_feat):
-        triplet = nn.TripletMarginWithDistanceLoss(distance_function=self.distance_fn, margin=0.3)
-        return triplet(sk_feat, img_feat, neg_feat)
-
-    def classification_loss(self, sk_feat, img_feat, cat_idx):
-        logits_sk = self.model.logit_scale.exp() * sk_feat @ self.text_emb_seen.t()
-        logits_img = self.model.logit_scale.exp() * img_feat @ self.text_emb_seen.t()
-        return 0.5 * (F.cross_entropy(logits_sk, cat_idx) + F.cross_entropy(logits_img, cat_idx))
+    # ──────────────────────────────────────────────────────────────────────────
+    # Training step
+    # ──────────────────────────────────────────────────────────────────────────
 
     def training_step(self, batch, batch_idx):
+        self._ensure_anchor()
+
         sk, img, neg, cat_name, cat_idx = batch
-        img_feat = self.forward(img, dtype='photo')
-        sk_feat = self.forward(sk, dtype='sketch')
-        neg_feat = self.forward(neg, dtype='photo')
-        
-        loss_tri = self.loss_fn(sk_feat, img_feat, neg_feat)
-        loss_cls = self.classification_loss(sk_feat, img_feat, cat_idx)
-        
-        self.update_protos(sk_feat.detach(), cat_idx, 'sk')
-        self.update_protos(img_feat.detach(), cat_idx, 'ph')
-        
-        loss_ssc, loss_xmod = self.structural_losses(sk_feat, img_feat, cat_idx, dist=self.args.ssc_dist)
-        
-        loss = loss_tri + self.args.lambd * loss_cls + self.args.l_ssc * (loss_ssc + self.args.l_x * loss_xmod)
-        self.log_dict({'tri': loss_tri, 'cls': loss_cls, 'ssc': loss_ssc, 'xmod': loss_xmod, 'train_loss': loss})
+        # cat_idx: [B] integer indices into self.seen_class_names
+
+        # ── Encode with prompted CLIP ──────────────────────────────────────
+        sk_feat  = self.forward(sk,  modality='sketch')    # [B, D]
+        ph_feat  = self.forward(img, modality='image')     # [B, D]
+        neg_feat = self.forward(neg, modality='image')     # [B, D]
+
+        # ── Triplet loss (CLIP-AT baseline) ───────────────────────────────
+        loss_tri = self.loss_fn(sk_feat, ph_feat, neg_feat)
+
+        # ── L_cls — classification loss ───────────────────────────────────
+        loss_cls = classification_loss(
+            sk_feat       = sk_feat,
+            ph_feat       = ph_feat,
+            cat_idx       = cat_idx,
+            text_emb_seen = self.text_emb_seen,
+            logit_scale   = 1.0 / 0.07,
+        )
+
+        # ── Update EMA prototype bank (no grad) ───────────────────────────
+        self.bank.update(sk_feat.detach(),  cat_idx, modality='sk')
+        self.bank.update(ph_feat.detach(), cat_idx, modality='ph')
+
+        # ── L_SSC + L_xmod ────────────────────────────────────────────────
+        loss_ssc, loss_xmod = structural_losses(
+            sk_feat  = sk_feat,
+            ph_feat  = ph_feat,
+            cat_idx  = cat_idx,
+            bank     = self.bank,
+            anchor_A = self.anchor_A,
+            dist     = self.opts.ssc_dist,
+            T        = self.opts.ssc_temp,
+            warmup   = self.opts.bank_warmup,
+        )
+
+        # ── L_asym_sph — frozen anchors (precomputed / on-the-fly) ────────
+        with torch.no_grad():
+            sk_anchor = self._encode_frozen(sk)
+            ph_anchor = self._encode_frozen(img)
+
+        loss_sph = asym_spherical_loss(
+            sk_feat   = sk_feat,
+            ph_feat   = ph_feat,
+            sk_anchor = sk_anchor,
+            ph_anchor = ph_anchor,
+            l_sph_ph  = self.opts.l_sph_ph,
+            l_sph_sk  = self.opts.l_sph_sk,
+        )
+
+        # ── Total loss ────────────────────────────────────────────────────
+        loss = (
+            loss_tri
+            + self.opts.l_cls * loss_cls
+            + self.opts.l_ssc * (loss_ssc + self.opts.l_x * loss_xmod)
+            + loss_sph
+        )
+
+        # ── Logging ───────────────────────────────────────────────────────
+        self.log_dict({
+            'train/loss_tri':   loss_tri,
+            'train/loss_cls':   loss_cls,
+            'train/loss_ssc':   loss_ssc,
+            'train/loss_xmod':  loss_xmod,
+            'train/loss_sph':   loss_sph,
+            'train/loss_total': loss,
+            'train/n_protos':   float(self.bank.proto_mask.sum().item()),
+        }, on_step=True, on_epoch=True, prog_bar=False)
+
         return loss
 
+    # ──────────────────────────────────────────────────────────────────────────
+    # Validation step — collect features
+    # ──────────────────────────────────────────────────────────────────────────
+
     def validation_step(self, batch, batch_idx, dataloader_idx=0):
-        image_tensor, label = batch
+        """
+        Collect sketch and photo features for retrieval evaluation.
+        We store two lists:
+          dataloader_idx=0 → ZS-SBIR  (gallery = unseen photos only)
+          dataloader_idx=1 → GZS-SBIR (gallery = seen + unseen photos)
+        """
+        sk, ph, _, _, cat_idx = batch
+
+        sk_feat = self.forward(sk,  modality='sketch')
+        ph_feat = self.forward(ph,  modality='image')
+
         if dataloader_idx == 0:
-            feat = self.forward(image_tensor, dtype='sketch')
-            self.val_step_outputs_sk.append((feat, label))
-            modality = "sketch"
-        else:
-            feat = self.forward(image_tensor, dtype='photo')
-            self.val_step_outputs_ph.append((feat, label))
-            modality = "photo"
-        
-        if self.args.visualize:
-            feat = feat.detach().cpu()
-            label = label.detach().cpu()
-            for f, l in zip(feat, label):
-                self.saved_features[str(int(l))][modality].append(f)
-    
+            self._val_sk_feats.append(sk_feat.cpu())
+            self._val_sk_labels.append(cat_idx.cpu())
+        # Photo gallery is the same for both ZS and GZS
+        self._val_ph_feats.append(ph_feat.cpu())
+        self._val_ph_labels.append(cat_idx.cpu())
+
     def on_validation_epoch_end(self):
-        if self.args.visualize:
-            visualize_classes = VISUALIZE_CLASSES[self.args.dataset]
-            visualize_tsne(visualize_classes, self.saved_features, mode="photo")
-            visualize_tsne(visualize_classes, self.saved_features, mode="sketch")
-        else:
-            query_len = len(self.val_step_outputs_sk)
-            gallery_len = len(self.val_step_outputs_ph)
-            
-            if query_len == 0 or gallery_len == 0:
-                print("Skip validation")
-                return
+        """Compute mAP and P@K from collected validation features."""
+        if not self._val_sk_feats:
+            return
 
-            query_feat_all = torch.cat([self.val_step_outputs_sk[i][0] for i in range(query_len)])
-            gallery_feat_all = torch.cat([self.val_step_outputs_ph[i][0] for i in range(gallery_len)])
-            
-            all_sketch_category = np.array(sum([list(self.val_step_outputs_sk[i][1].detach().cpu().numpy()) for i in range(query_len)], []))
-            all_photo_category = np.array(sum([list(self.val_step_outputs_ph[i][1].detach().cpu().numpy()) for i in range(gallery_len)], []))
-            
-            gallery = gallery_feat_all
-            ap = torch.zeros(len(query_feat_all))
-            precision = torch.zeros(len(query_feat_all))
-            if self.args.dataset == "sketchy_2":
-                map_k = 200
-                p_k = 200
-            else:
-                map_k = 0
-                if self.args.dataset == "quickdraw":
-                    p_k = 200
-                else:
-                    p_k = 100
-                    
-            for idx, sk_feat in enumerate(query_feat_all):
-                category = all_sketch_category[idx]
-                distance = self.distance_fn(sk_feat.unsqueeze(0), gallery)
-                target = torch.zeros(len(gallery), dtype=torch.bool, device=device)
-                target[np.where(all_photo_category == category)] = True
-                
-                if map_k != 0:
-                    top_k_actual = min(map_k, len(gallery)) 
-                    ap[idx] = retrieval_average_precision(distance.cpu(), target.cpu(), top_k=top_k_actual)
-                else: 
-                    ap[idx] = retrieval_average_precision(distance.cpu(), target.cpu())
-                    
-                precision[idx] = retrieval_precision(distance.cpu(), target.cpu(), top_k=p_k)
-                
-            mAP = torch.mean(ap)
-            precision = torch.mean(precision)
-            self.log("mAP", mAP, on_step=False, on_epoch=True)
-            if self.global_step > 0:
-                self.best_metric = self.best_metric if  (self.best_metric > mAP.item()) else mAP.item()
-            
-            if map_k != 0:
-                print('mAP@{}: {}, P@{}: {}, Best mAP: {}'.format(map_k, mAP.item(), p_k, precision, self.best_metric))
-            else:
-                print('mAP@all: {}, P@{}: {}, Best mAP: {}'.format(mAP.item(), p_k, precision, self.best_metric))
-            train_loss = self.trainer.callback_metrics.get("train_loss", None)
+        sk_feats  = torch.cat(self._val_sk_feats)
+        ph_feats  = torch.cat(self._val_ph_feats)
+        sk_labels = torch.cat(self._val_sk_labels)
+        ph_labels = torch.cat(self._val_ph_labels)
 
-            if train_loss is not None:
-                print(f"Train loss (epoch avg): {train_loss.item():.6f}")
-                
-        self.val_step_outputs_sk.clear()
-        self.val_step_outputs_ph.clear()
-        self.saved_features.clear()
+        metric_cfg = get_metric_config(self.opts.dataset)
+
+        # ZS-SBIR
+        zs_metrics = compute_retrieval_metrics(
+            sk_feats  = sk_feats,
+            ph_feats  = ph_feats,
+            sk_labels = sk_labels,
+            ph_labels = ph_labels,
+            **metric_cfg,
+        )
+
+        zs_map = zs_metrics['mAP']
+        prec_k = metric_cfg['prec_k']
+
+        self.log_dict({
+            'val/ZS_mAP':   zs_map,
+            f'val/ZS_P@{prec_k}': zs_metrics[f'P@{prec_k}'],
+        }, prog_bar=True, on_epoch=True)
+
+        if zs_map > self.best_zs_map:
+            self.best_zs_map = zs_map
+            self.log('val/best_ZS_mAP', self.best_zs_map, prog_bar=True)
+
+        # Clear buffers
+        self._val_sk_feats.clear()
+        self._val_ph_feats.clear()
+        self._val_sk_labels.clear()
+        self._val_ph_labels.clear()
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Optimiser — two param groups with different LRs
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def configure_optimizers(self):
+        """
+        Prompt parameters:   lr_prompt (high LR — these are learnable from scratch)
+        LayerNorm parameters: lr_ln    (low  LR — fine-tune pretrained LN stats)
+        """
+        prompt_params = [self.sk_prompt, self.img_prompt]
+        ln_params = [
+            p for name, p in self.clip.named_parameters()
+            if p.requires_grad  # only LayerNorm weights are unfrozen
+        ]
+
+        optimizer = torch.optim.AdamW([
+            {'params': prompt_params, 'lr': self.opts.lr_prompt},
+            {'params': ln_params,     'lr': self.opts.lr_ln,    'weight_decay': 0.0},
+        ], weight_decay=self.opts.weight_decay)
+
+        # Cosine LR schedule with linear warmup
+        total_steps   = self.trainer.estimated_stepping_batches
+        warmup_steps  = int(total_steps * self.opts.warmup_epochs / self.opts.max_epochs)
+
+        def lr_lambda(step):
+            if step < warmup_steps:
+                return float(step) / max(1, warmup_steps)
+            progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
+            return 0.5 * (1.0 + torch.cos(torch.tensor(3.14159265 * progress)).item())
+
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+
+        return {
+            'optimizer':  optimizer,
+            'lr_scheduler': {
+                'scheduler': scheduler,
+                'interval':  'step',
+            },
+        }
