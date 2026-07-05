@@ -43,6 +43,17 @@ from pytorch_lightning.callbacks import (
 )
 from torch.utils.data import DataLoader
 
+class CustomProgressBar(TQDMProgressBar):
+    def init_validation_tqdm(self):
+        bar = super().init_validation_tqdm()
+        bar.set_description('Eval')
+        return bar
+        
+    def init_sanity_tqdm(self):
+        bar = super().init_sanity_tqdm()
+        bar.set_description('Sanity Check')
+        return bar
+
 # ── make sure repo root is on sys.path ──────────────────────────────────────
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -99,6 +110,7 @@ def main():
         monitor   = 'mAP',
         mode      = 'max',
         save_top_k = 3,
+        verbose   = False,
         auto_insert_metric_name = False,
     )
     lr_monitor = LearningRateMonitor(logging_interval='step')
@@ -106,9 +118,9 @@ def main():
         monitor='mAP',
         patience=3,
         mode='max',
-        verbose=True,
+        verbose=False,
     )
-    prog_bar = TQDMProgressBar(refresh_rate=10)
+    prog_bar = CustomProgressBar(refresh_rate=10)
 
     callbacks = [checkpoint_cb, lr_monitor, early_stop_cb, prog_bar]
 
