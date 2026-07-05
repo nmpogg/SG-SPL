@@ -39,6 +39,7 @@ from pytorch_lightning.callbacks import (
     ModelCheckpoint,
     LearningRateMonitor,
     EarlyStopping,
+    TQDMProgressBar,
 )
 from torch.utils.data import DataLoader
 
@@ -107,8 +108,9 @@ def main():
         mode='max',
         verbose=True,
     )
+    prog_bar = TQDMProgressBar(refresh_rate=10)
 
-    callbacks = [checkpoint_cb, lr_monitor, early_stop_cb]
+    callbacks = [checkpoint_cb, lr_monitor, early_stop_cb, prog_bar]
 
     # ── 6. Trainer (Lightning 2.6.4) ──────────────────────────────────────
     trainer = pl.Trainer(

@@ -311,11 +311,16 @@ class SGSPLModel(pl.LightningModule):
         self.log_dict({
             'mAP':   zs_map,
             f'P@{prec_k}': zs_metrics[f'P@{prec_k}'],
-        }, prog_bar=True, on_epoch=True)
+        }, prog_bar=False, on_epoch=True)
 
         if zs_map > self.best_zs_map:
             self.best_zs_map = zs_map
-            self.log('best_mAP', self.best_zs_map, prog_bar=True, on_epoch=True)
+            self.log('best_mAP', self.best_zs_map, prog_bar=False, on_epoch=True)
+
+        # Print the exact string requested by the user
+        train_loss = self.trainer.callback_metrics.get('train/loss_total_epoch', torch.tensor(0.0)).item()
+        print(f"\nmAP@{prec_k}: {zs_map}, P@{prec_k}: {zs_metrics[f'P@{prec_k}']}, Best mAP: {self.best_zs_map}")
+        print(f"Train loss (epoch avg): {train_loss:.6f}")
 
         # Clear buffers
         self._val_sk_feats.clear()
