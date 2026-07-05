@@ -254,7 +254,7 @@ class SGSPLModel(pl.LightningModule):
             'train/loss_sph':   loss_sph,
             'train/loss_total': loss,
             'train/n_protos':   float(self.bank.proto_mask.sum().item()),
-        }, on_step=True, on_epoch=True, prog_bar=False)
+        }, on_step=True, on_epoch=True, prog_bar=False, batch_size=sk.size(0))
 
         return loss
 
@@ -305,14 +305,13 @@ class SGSPLModel(pl.LightningModule):
         zs_map = zs_metrics['mAP']
         prec_k = metric_cfg['prec_k']
 
-        self.log_dict({
-            'val/ZS_mAP':   zs_map,
-            f'val/ZS_P@{prec_k}': zs_metrics[f'P@{prec_k}'],
-        }, prog_bar=True, on_epoch=True)
+        # Only show mAP on progress bar to prevent text wrapping/breaking
+        self.log('val/ZS_mAP', zs_map, prog_bar=True, on_epoch=True)
+        self.log(f'val/ZS_P@{prec_k}', zs_metrics[f'P@{prec_k}'], prog_bar=False, on_epoch=True)
 
         if zs_map > self.best_zs_map:
             self.best_zs_map = zs_map
-            self.log('val/best_ZS_mAP', self.best_zs_map, prog_bar=True)
+            self.log('val/best_ZS_mAP', self.best_zs_map, prog_bar=False)
 
         # Clear buffers
         self._val_sk_feats.clear()
