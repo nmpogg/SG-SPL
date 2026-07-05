@@ -351,7 +351,7 @@ class SGSPLModel(pl.LightningModule):
         # Unfreeze logit_scale and add to ln group (matches SG_SPL_v1 behaviour
         # where freeze_all_but_bn leaves logit_scale trainable at lr=1e-6)
         self.clip.logit_scale.requires_grad_(True)
-        if self.clip.logit_scale not in ln_params:
+        if not any(p is self.clip.logit_scale for p in ln_params):
             ln_params.append(self.clip.logit_scale)
 
         optimizer = torch.optim.AdamW([
