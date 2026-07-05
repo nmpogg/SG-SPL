@@ -100,6 +100,8 @@ parser.add_argument('--ema_m',      type=float, default=0.9,
                     help='EMA momentum for prototype bank update')
 parser.add_argument('--bank_warmup',type=int,   default=10,
                     help='Minimum number of active prototypes before computing L_SSC/L_xmod')
+parser.add_argument('--no_proto_grad',action='store_true',
+                    help='Stop gradient flow through prototype bank (ablation)')
 
 # ─────────────────────────────────────────────
 # Text anchor templates

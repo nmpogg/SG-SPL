@@ -131,6 +131,7 @@ class PrototypeBank(nn.Module):
         sk_feat: torch.Tensor,
         ph_feat: torch.Tensor,
         cat_idx: torch.Tensor,
+        no_grad: bool = False,
     ):
         """
         Return prototype matrices Psk, Pph where:
@@ -145,11 +146,12 @@ class PrototypeBank(nn.Module):
         Psk = self.proto_sk.clone()
         Pph = self.proto_ph.clone()
 
-        for c in cat_idx.unique():
-            c_int = c.item()
-            mask = (cat_idx == c_int)
-            Psk[c_int] = F.normalize(sk_feat[mask].mean(0), dim=-1)
-            Pph[c_int] = F.normalize(ph_feat[mask].mean(0), dim=-1)
+        if not no_grad:
+            for c in cat_idx.unique():
+                c_int = c.item()
+                mask = (cat_idx == c_int)
+                Psk[c_int] = F.normalize(sk_feat[mask].mean(0), dim=-1)
+                Pph[c_int] = F.normalize(ph_feat[mask].mean(0), dim=-1)
 
         idx = self.proto_mask.nonzero(as_tuple=True)[0]
         return Psk, Pph, idx
@@ -200,6 +202,7 @@ def structural_losses(
     dist:     str   = 'mse',        # 'mse' | 'kl'
     T:        float = 0.1,
     warmup:   int   = 10,
+    no_proto_grad: bool = False,
 ) -> tuple:
     """
     Compute L_SSC and L_xmod using the prototype bank.
@@ -212,7 +215,7 @@ def structural_losses(
 
     Returns: (loss_ssc, loss_xmod)
     """
-    Psk, Pph, idx = bank.get_prototypes_with_grad(sk_feat, ph_feat, cat_idx)
+    Psk, Pph, idx = bank.get_prototypes_with_grad(sk_feat, ph_feat, cat_idx, no_grad=no_proto_grad)
 
     # Warm-up guard: wait until enough classes have been seen
     if idx.numel() < warmup:

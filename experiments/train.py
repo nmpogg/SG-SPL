@@ -35,24 +35,17 @@ import argparse
 import torch
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import TensorBoardLogger
+
+# Force tqdm (standard) progress bar — disable rich/notebook variants
+# Must be set BEFORE importing pytorch_lightning callbacks
+os.environ['FORCE_SIMPLE_PROGRESSBAR'] = '1'   # suppresses RichProgressBar on some PL versions
+
 from pytorch_lightning.callbacks import (
     ModelCheckpoint,
     LearningRateMonitor,
     EarlyStopping,
-    TQDMProgressBar,
 )
 from torch.utils.data import DataLoader
-
-class CustomProgressBar(TQDMProgressBar):
-    def init_validation_tqdm(self):
-        bar = super().init_validation_tqdm()
-        bar.set_description('Eval')
-        return bar
-        
-    def init_sanity_tqdm(self):
-        bar = super().init_sanity_tqdm()
-        bar.set_description('Sanity Check')
-        return bar
 
 # ── make sure repo root is on sys.path ──────────────────────────────────────
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -60,6 +53,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from experiments.options import parser          # argparse parser
 from src.model import SGSPLModel
 from src.dataset_retrieval import get_dataset
+from src.utils import CustomProgressBar
 
 
 def main():
@@ -136,7 +130,8 @@ def main():
         check_val_every_n_epoch = opts.val_every,
         num_sanity_val_steps = opts.sanity_steps,
         log_every_n_steps  = 10,
-        deterministic      = False,              # True slows down, False is fine with seed
+        deterministic      = False,
+        enable_progress_bar = True,             # keep tqdm; suppress Rich
     )
 
     # ── 7. Train ──────────────────────────────────────────────────────────

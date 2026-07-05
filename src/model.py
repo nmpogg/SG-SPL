@@ -223,6 +223,7 @@ class SGSPLModel(pl.LightningModule):
             dist     = self.opts.ssc_dist,
             T        = self.opts.ssc_temp,
             warmup   = self.opts.bank_warmup,
+            no_proto_grad = self.opts.no_proto_grad,
         )
 
         # ── L_asym_sph — frozen anchors (precomputed / on-the-fly) ────────
