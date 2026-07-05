@@ -118,6 +118,8 @@ parser.add_argument('--precision',    type=str, default='16-mixed',
 parser.add_argument('--grad_clip',    type=float, default=1.0)
 parser.add_argument('--val_every',    type=int,   default=1,
                     help='Run validation every N epochs')
+parser.add_argument('--sanity_steps', type=int,   default=-1,
+                    help='Number of validation steps to run before training (-1 for full epoch, 2 for default check, 0 to disable)')
 parser.add_argument('--ckpt_path',    type=str,   default=None,
                     help='Path to checkpoint to resume from (Lightning 2.x style)')
 

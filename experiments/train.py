@@ -120,6 +120,7 @@ def main():
         precision          = opts.precision,     # '16-mixed' or '32'
         gradient_clip_val  = opts.grad_clip,
         check_val_every_n_epoch = opts.val_every,
+        num_sanity_val_steps = opts.sanity_steps,
         log_every_n_steps  = 10,
         deterministic      = False,              # True slows down, False is fine with seed
     )
