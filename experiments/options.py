@@ -39,7 +39,7 @@ parser.add_argument('--image_size', type=int,   default=224)
 # CLIP backbone
 # ─────────────────────────────────────────────
 parser.add_argument('--clip_model', type=str,   default='ViT-B/32',
-                    choices=['ViT-B/32', 'ViT-B/16', 'ViT-L/14'])
+                    help='CLIP model name (e.g. ViT-B/32) OR path to a local .pt file for offline use.')
 parser.add_argument('--embed_dim',  type=int,   default=512,
                     help='CLIP embedding dimension (512 for ViT-B/32, 768 for ViT-L/14)')
 
