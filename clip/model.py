@@ -227,11 +227,7 @@ class VisionTransformer(nn.Module):
         x = torch.cat([self.class_embedding.to(x.dtype) + torch.zeros(x.shape[0], 1, x.shape[-1], dtype=x.dtype, device=x.device), x], dim=1)  # shape = [*, grid ** 2 + 1, width]
         x = x + self.positional_embedding.to(x.dtype)
         if prompt is not None:
-            # Support both [n_prompts, width] (from src/model.py) and
-            # [B, n_prompts, width] (CLIP-AT original style)
-            if prompt.dim() == 2:
-                prompt = prompt.unsqueeze(0).expand(x.shape[0], -1, -1)
-            x = torch.cat([x, prompt.to(x.dtype)], dim=1)  # [B, grid²+1+n_prompts, width]
+            x = torch.cat([x, prompt.to(x.dtype)], dim=1)  # [B, grid ** 2 + 1 + n_prompts, width]
 
         x = self.ln_pre(x)
 

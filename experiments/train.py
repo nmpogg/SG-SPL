@@ -36,7 +36,7 @@ import torch
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import TensorBoardLogger
 
-os.environ['FORCE_SIMPLE_PROGRESSBAR'] = '1'
+# os.environ['FORCE_SIMPLE_PROGRESSBAR'] = '1'
 
 from pytorch_lightning.callbacks import (
     ModelCheckpoint,
@@ -104,7 +104,7 @@ def main():
         mode='max',
         verbose=False,
     )
-    prog_bar = CustomProgressBar(refresh_rate=10)
+    prog_bar = CustomProgressBar(refresh_rate=1)
 
     callbacks = [checkpoint_cb, lr_monitor, early_stop_cb, prog_bar]
 

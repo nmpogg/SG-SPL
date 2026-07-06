@@ -46,9 +46,8 @@ parser.add_argument('--prompt_dim', type=int, default=768,
 # Optimizer
 parser.add_argument('--lr_prompt', type=float, default=1e-4, help='Learning rate for prompt parameters')
 parser.add_argument('--lr_ln', type=float, default=1e-6, help='Learning rate for CLIP LayerNorm parameters')
-parser.add_argument('--weight_decay',type=float,default=1e-4)
+# parser.add_argument('--weight_decay',type=float,default=1e-4)
 parser.add_argument('--max_epochs', type=int, default=20)
-parser.add_argument('--warmup_epochs',type=int, default=5)
 
 
 # Loss weights

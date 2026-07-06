@@ -53,53 +53,42 @@ class SGSPLModel(pl.LightningModule):
         self.seen_class_names = seen_class_names
         self.n_seen = len(seen_class_names)
 
-        # ── 1. CLIP backbone ──────────────────────────────────────────────
+        # clip for prompt tuning (trainable except LayerNorm)
         clip_model, _ = clip_module.load(opts.clip_model, device='cpu')
         clip_model = clip_model.float()     # work in fp32 internally
         freeze_all_but_ln(clip_model)
         self.clip = clip_model
 
-        # ── 2. Frozen CLIP copy (no grad, eval always) ────────────────────
-        # deepcopy BEFORE any training modifies LayerNorm weights
+        # frozen clip for anchor + L_asym_sph
         self.clip_frozen = copy.deepcopy(clip_model)
         self.clip_frozen.requires_grad_(False)
         self.clip_frozen.eval()
 
-        # ── 3. Learnable prompt tokens (CLIP-AT style) ────────────────────
-        # IMPORTANT: prompt dim = transformer INTERNAL width, NOT output embed_dim.
-        #   ViT-B/32: width=768, output=512
-        #   ViT-B/16: width=768, output=512
-        #   ViT-L/14: width=1024, output=768
-        # Infer from positional_embedding to be robust across all backbones.
+        # Learnable prompt tokens (CLIP-AT style)
         visual_width = clip_model.visual.positional_embedding.shape[-1]
-        self.sk_prompt  = nn.Parameter(
-            torch.randn(opts.n_prompts, visual_width) * 0.02
-        )
-        self.img_prompt = nn.Parameter(
-            torch.randn(opts.n_prompts, visual_width) * 0.02
-        )
+        self.sk_prompt  = nn.Parameter(torch.randn(opts.n_prompts, visual_width))
+        self.img_prompt = nn.Parameter(torch.randn(opts.n_prompts, visual_width))
 
-        # ── 4. Triplet loss (CLIP-AT baseline) ────────────────────────────
+        # Triplet loss (CLIP-AT baseline)
         self.distance_fn = lambda x, y: 1.0 - F.cosine_similarity(x, y)
         self.loss_fn = nn.TripletMarginWithDistanceLoss(
             distance_function=self.distance_fn,
             margin=opts.triplet_margin,
         )
 
-        # ── 5. EMA prototype bank ─────────────────────────────────────────
+        # EMA prototype bank
         self.bank = PrototypeBank(
             n_classes = self.n_seen,
             embed_dim = opts.embed_dim,
             momentum  = opts.ema_m,
         )
 
-        # ── 6. Text anchor A  (built after device is known → deferred) ────
+        # Text anchor A  (built after device is known → deferred)
         # Will be populated in setup() or first training_step via _ensure_anchor()
         self.register_buffer('anchor_A',       None, persistent=False)
         self.register_buffer('text_emb_seen',  None, persistent=False)
         self._anchor_built = False
 
-        # ── Misc ──────────────────────────────────────────────────────────
         self.best_zs_map  = -1.0
         self.best_gzs_map = -1.0
 
@@ -109,10 +98,7 @@ class SGSPLModel(pl.LightningModule):
         self._val_sk_labels = []
         self._val_ph_labels = []
 
-    # ──────────────────────────────────────────────────────────────────────────
     # Anchor matrix (deferred — needs device)
-    # ──────────────────────────────────────────────────────────────────────────
-
     def _ensure_anchor(self):
         """Build text anchor matrix on the correct device (called lazily)."""
         if self._anchor_built:
@@ -129,18 +115,11 @@ class SGSPLModel(pl.LightningModule):
         self.bank.to(self.device)
         self._anchor_built = True
 
-    # ──────────────────────────────────────────────────────────────────────────
-    # Lightning hooks
-    # ──────────────────────────────────────────────────────────────────────────
 
     def on_train_epoch_start(self):
-        # Lightning sets ALL sub-modules to train mode at epoch start.
-        # We must re-lock clip_frozen to eval so BN/LN stats don't shift.
+        # re-lock clip_frozen to eval
         self.clip_frozen.eval()
 
-    # ──────────────────────────────────────────────────────────────────────────
-    # Forward: encode a batch with the prompted CLIP
-    # ──────────────────────────────────────────────────────────────────────────
 
     def forward(self, images: torch.Tensor, modality: str) -> torch.Tensor:
         """
@@ -156,7 +135,7 @@ class SGSPLModel(pl.LightningModule):
         prompt = self.sk_prompt if modality == 'sketch' else self.img_prompt
         if prompt.shape[0] == 0:
             prompt = None
-        feats  = self.clip.encode_image(images, prompt=prompt)
+        feats  = self.clip.encode_image(images, prompt=prompt.expand(images.shape[0], -1, -1))
         feats  = feats.float()                          # fp32 for stable loss
         return F.normalize(feats, dim=-1)
 
@@ -169,9 +148,6 @@ class SGSPLModel(pl.LightningModule):
         feats = self.clip_frozen.encode_image(images, prompt=None)
         return F.normalize(feats.float(), dim=-1)
 
-    # ──────────────────────────────────────────────────────────────────────────
-    # Training step
-    # ──────────────────────────────────────────────────────────────────────────
 
     def training_step(self, batch, batch_idx):
         self._ensure_anchor()
@@ -179,18 +155,15 @@ class SGSPLModel(pl.LightningModule):
         sk, img, neg, cat_name, cat_idx = batch
         # cat_idx: [B] integer indices into self.seen_class_names
 
-        # ── Encode with prompted CLIP ──────────────────────────────────────
+        # Encode with prompted CLIP
         sk_feat  = self.forward(sk,  modality='sketch')    # [B, D]
         ph_feat  = self.forward(img, modality='image')     # [B, D]
         neg_feat = self.forward(neg, modality='image')     # [B, D]
 
-        # ── Triplet loss (CLIP-AT baseline) ───────────────────────────────
+        # Triplet loss (CLIP-AT baseline)
         loss_tri = self.loss_fn(sk_feat, ph_feat, neg_feat)
 
-        # ── L_cls — classification loss ───────────────────────────────────
-        # Use CLIP's learnable logit_scale matching SG_SPL_v1 (trainable, lr=1e-6)
-        # Clamp to [0, 4.6052] so scale stays in [1, 100] — prevents L_cls from
-        # exploding and overwhelming the structural losses L_SSC / L_xmod
+        # L_cls — classification loss
         logit_scale = self.clip.logit_scale.exp()
         loss_cls = classification_loss(
             sk_feat       = sk_feat,
@@ -200,11 +173,11 @@ class SGSPLModel(pl.LightningModule):
             logit_scale   = logit_scale,
         )
 
-        # ── Update EMA prototype bank (no grad) ───────────────────────────
+        #  Update EMA prototype bank (no grad)
         self.bank.update(sk_feat.detach(),  cat_idx, modality='sk')
         self.bank.update(ph_feat.detach(), cat_idx, modality='ph')
 
-        # ── L_SSC + L_xmod ────────────────────────────────────────────────
+        # L_SSC + L_xmod
         loss_ssc, loss_xmod = structural_losses(
             sk_feat  = sk_feat,
             ph_feat  = ph_feat,
@@ -217,7 +190,7 @@ class SGSPLModel(pl.LightningModule):
             no_proto_grad = self.opts.no_proto_grad,
         )
 
-        # ── L_asym_sph — frozen anchors (precomputed / on-the-fly) ────────
+        # L_asym_sph — frozen anchors (precomputed / on-the-fly)
         with torch.no_grad():
             sk_anchor = self._encode_frozen(sk)
             ph_anchor = self._encode_frozen(img)
@@ -231,7 +204,7 @@ class SGSPLModel(pl.LightningModule):
             l_sph_sk  = self.opts.l_sph_sk,
         )
 
-        # ── Total loss ────────────────────────────────────────────────────
+        # Total loss
         loss = (
             loss_tri
             + self.opts.l_cls * loss_cls
@@ -239,7 +212,6 @@ class SGSPLModel(pl.LightningModule):
             + loss_sph
         )
 
-        # ── Logging ───────────────────────────────────────────────────────
         self.log_dict({
             'train/loss_tri':   loss_tri,
             'train/loss_cls':   loss_cls,
@@ -299,7 +271,6 @@ class SGSPLModel(pl.LightningModule):
         zs_map = zs_metrics['mAP']
         prec_k = metric_cfg['prec_k']
 
-        # Only show mAP on progress bar to prevent text wrapping/breaking
         self.log_dict({
             'mAP':   zs_map,
             f'P@{prec_k}': zs_metrics[f'P@{prec_k}'],
@@ -309,7 +280,6 @@ class SGSPLModel(pl.LightningModule):
             self.best_zs_map = zs_map
             self.log('best_mAP', self.best_zs_map, prog_bar=False, on_epoch=True)
 
-        # Print the exact string requested by the user
         train_loss = self.trainer.callback_metrics.get('train/loss_total_epoch', torch.tensor(0.0)).item()
         print(f"\nmAP@{prec_k}: {zs_map}, P@{prec_k}: {zs_metrics[f'P@{prec_k}']}, Best mAP: {self.best_zs_map}")
         print(f"Train loss (epoch avg): {train_loss:.6f}")
@@ -320,10 +290,7 @@ class SGSPLModel(pl.LightningModule):
         self._val_sk_labels.clear()
         self._val_ph_labels.clear()
 
-    # ──────────────────────────────────────────────────────────────────────────
     # Optimiser — two param groups with different LRs
-    # ──────────────────────────────────────────────────────────────────────────
-
     def configure_optimizers(self):
         """
         Prompt parameters:   lr_prompt (high LR — these are learnable from scratch)
@@ -335,33 +302,37 @@ class SGSPLModel(pl.LightningModule):
             if p.requires_grad  # only LayerNorm weights are unfrozen
         ]
 
-        # Unfreeze logit_scale and add to ln group (matches SG_SPL_v1 behaviour
-        # where freeze_all_but_bn leaves logit_scale trainable at lr=1e-6)
-        self.clip.logit_scale.requires_grad_(True)
-        if not any(p is self.clip.logit_scale for p in ln_params):
-            ln_params.append(self.clip.logit_scale)
+        # self.clip.logit_scale.requires_grad_(True)
+        # if not any(p is self.clip.logit_scale for p in ln_params):
+        #     ln_params.append(self.clip.logit_scale)
 
-        optimizer = torch.optim.AdamW([
+        # optimizer = torch.optim.Adam([
+        #     {'params': prompt_params, 'lr': self.opts.lr_prompt},
+        #     {'params': ln_params,     'lr': self.opts.lr_ln},
+        # ], weight_decay=self.opts.weight_decay)
+
+        optimizer = torch.optim.Adam([
             {'params': prompt_params, 'lr': self.opts.lr_prompt},
-            {'params': ln_params,     'lr': self.opts.lr_ln,    'weight_decay': 0.0},
-        ], weight_decay=self.opts.weight_decay)
+            {'params': ln_params,     'lr': self.opts.lr_ln},
+        ])
 
         # Cosine LR schedule with linear warmup
-        total_steps   = self.trainer.estimated_stepping_batches
-        warmup_steps  = int(total_steps * self.opts.warmup_epochs / self.opts.max_epochs)
+        # total_steps   = self.trainer.estimated_stepping_batches
+        # warmup_steps  = int(total_steps * self.opts.warmup_epochs / self.opts.max_epochs)
 
-        def lr_lambda(step):
-            if step < warmup_steps:
-                return float(step) / max(1, warmup_steps)
-            progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
-            return 0.5 * (1.0 + torch.cos(torch.tensor(3.14159265 * progress)).item())
+        # def lr_lambda(step):
+        #     if step < warmup_steps:
+        #         return float(step) / max(1, warmup_steps)
+        #     progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
+        #     return 0.5 * (1.0 + torch.cos(torch.tensor(3.14159265 * progress)).item())
 
-        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+        # scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
-        return {
-            'optimizer':  optimizer,
-            'lr_scheduler': {
-                'scheduler': scheduler,
-                'interval':  'step',
-            },
-        }
+        # return {
+        #     'optimizer':  optimizer,
+        #     'lr_scheduler': {
+        #         'scheduler': scheduler,
+        #         'interval':  'step',
+        #     },
+        # }
+        return optimizer
