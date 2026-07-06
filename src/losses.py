@@ -22,10 +22,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # Anchor matrix builder
-# ─────────────────────────────────────────────────────────────────────────────
-
 @torch.no_grad()
 def build_text_anchor(clip_model, class_names, templates, device):
     """
@@ -52,7 +49,7 @@ def build_text_anchor(clip_model, class_names, templates, device):
     for cls_name in class_names:
         # Encode each template and average
         prompts = [t.format(cls_name.replace('_', ' ')) for t in templates]
-        # Tokenise
+        # Tokenize
         tokens = torch.cat([
             _tokenize(p, tokenizer) for p in prompts
         ]).to(device)
@@ -76,13 +73,10 @@ def _tokenize(text: str, tokenizer, context_length: int = 77):
     n = min(len(tokens), context_length)
     result[0, :n] = torch.tensor(tokens[:n])
     result[0, n - 1] = eot
-    return result
+    return result # id token
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # EMA Prototype Bank
-# ─────────────────────────────────────────────────────────────────────────────
-
 class PrototypeBank(nn.Module):
     """
     EMA-updated per-class prototype bank for sketch and photo modalities.
@@ -126,7 +120,7 @@ class PrototypeBank(nn.Module):
                 bank[c] = f
             self.proto_mask[c] = True
 
-    def get_prototypes_with_grad(
+    def get_prototypes(
         self,
         sk_feat: torch.Tensor,
         ph_feat: torch.Tensor,
@@ -135,7 +129,7 @@ class PrototypeBank(nn.Module):
     ):
         """
         Return prototype matrices Psk, Pph where:
-          - in-batch classes use differentiable batch mean → gradient flows
+          - in-batch classes use differentiable batch mean → gradient flows (to loss and prompts)
           - out-of-batch classes use detached EMA bank values
 
         Returns:
@@ -157,16 +151,13 @@ class PrototypeBank(nn.Module):
         return Psk, Pph, idx
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # Classification Loss  L_cls
-# ─────────────────────────────────────────────────────────────────────────────
-
 def classification_loss(
     sk_feat:       torch.Tensor,   # [B, D]
     ph_feat:       torch.Tensor,   # [B, D]
     cat_idx:       torch.Tensor,   # [B]
     text_emb_seen: torch.Tensor,   # [C_s, D]
-    logit_scale:   float = 1.0 / 0.07,
+    logit_scale:   float,
 ) -> torch.Tensor:
     """
     Symmetric image–text classification loss over seen classes.
@@ -189,10 +180,7 @@ def classification_loss(
     return loss
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 # Structural Losses  L_SSC + L_xmod
-# ─────────────────────────────────────────────────────────────────────────────
-
 def structural_losses(
     sk_feat:  torch.Tensor,         # [B, D]
     ph_feat:  torch.Tensor,         # [B, D]
@@ -215,14 +203,14 @@ def structural_losses(
 
     Returns: (loss_ssc, loss_xmod)
     """
-    Psk, Pph, idx = bank.get_prototypes_with_grad(sk_feat, ph_feat, cat_idx, no_grad=no_proto_grad)
+    Psk, Pph, idx = bank.get_prototypes(sk_feat, ph_feat, cat_idx, no_grad=no_proto_grad)
 
     # Warm-up guard: wait until enough classes have been seen
     if idx.numel() < warmup:
         zero = sk_feat.new_zeros(1).squeeze()
         return zero, zero
 
-    A   = anchor_A[idx][:, idx]        # [K, K]
+    A = anchor_A[idx][:, idx]          # [K, K]
     Ssk = Psk[idx] @ Psk[idx].t()      # [K, K]
     Sph = Pph[idx] @ Pph[idx].t()      # [K, K]
 
@@ -243,10 +231,8 @@ def structural_losses(
     return loss_ssc, loss_xmod
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Asymmetric Hyperspherical Anchoring  L_asym_sph
-# ─────────────────────────────────────────────────────────────────────────────
 
+# Asymmetric Hyperspherical Anchoring  L_asym_sph
 def asym_spherical_loss(
     sk_feat:    torch.Tensor,   # [B, D] — prompted sketch features
     ph_feat:    torch.Tensor,   # [B, D] — prompted photo features

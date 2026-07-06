@@ -33,25 +33,12 @@ from src.losses import (
 from src.eval import compute_retrieval_metrics, get_metric_config
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Utility
-# ─────────────────────────────────────────────────────────────────────────────
-
 def freeze_all_but_ln(module: nn.Module):
-    """
-    Freeze every parameter except those in LayerNorm layers.
-    Matches the CLIP-AT strategy ('freeze_all_but_bn' in their code,
-    which actually checks isinstance(m, LayerNorm)).
-    """
     for m in module.modules():
         if not isinstance(m, nn.LayerNorm):
             for p in m.parameters(recurse=False):
                 p.requires_grad_(False)
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# SGSPLModel
-# ─────────────────────────────────────────────────────────────────────────────
 
 class SGSPLModel(pl.LightningModule):
 
@@ -204,7 +191,7 @@ class SGSPLModel(pl.LightningModule):
         # Use CLIP's learnable logit_scale matching SG_SPL_v1 (trainable, lr=1e-6)
         # Clamp to [0, 4.6052] so scale stays in [1, 100] — prevents L_cls from
         # exploding and overwhelming the structural losses L_SSC / L_xmod
-        logit_scale = self.clip.logit_scale.clamp(0, 4.6052).exp()
+        logit_scale = self.clip.logit_scale.exp()
         loss_cls = classification_loss(
             sk_feat       = sk_feat,
             ph_feat       = ph_feat,

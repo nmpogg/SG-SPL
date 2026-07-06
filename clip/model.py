@@ -221,36 +221,24 @@ class VisionTransformer(nn.Module):
         self.proj = nn.Parameter(scale * torch.randn(width, output_dim))
 
     def forward(self, x: torch.Tensor, prompt: torch.Tensor = None):
-        """
-        Args:
-            x:      image tensor [N, 3, H, W]
-            prompt: optional prompt tokens [n_prompts, width] (shared across batch)
-                    Inserted between CLS token and patch tokens (VPT-shallow style).
-                    When prompt=None, behaves identically to vanilla CLIP.
-        """
-        x = self.conv1(x)  # shape = [N, width, grid, grid]
-        x = x.reshape(x.shape[0], x.shape[1], -1)  # shape = [N, width, grid**2]
-        x = x.permute(0, 2, 1)  # shape = [N, grid**2, width]
-        x = torch.cat([
-            self.class_embedding.to(x.dtype) + torch.zeros(x.shape[0], 1, x.shape[-1], dtype=x.dtype, device=x.device),
-            x
-        ], dim=1)  # shape = [N, grid**2 + 1, width]
+        x = self.conv1(x)  # shape = [*, width, grid, grid]
+        x = x.reshape(x.shape[0], x.shape[1], -1)  # shape = [*, width, grid ** 2]
+        x = x.permute(0, 2, 1)  # shape = [*, grid ** 2, width]
+        x = torch.cat([self.class_embedding.to(x.dtype) + torch.zeros(x.shape[0], 1, x.shape[-1], dtype=x.dtype, device=x.device), x], dim=1)  # shape = [*, grid ** 2 + 1, width]
         x = x + self.positional_embedding.to(x.dtype)
+        if prompt is not None:
+            # Support both [n_prompts, width] (from src/model.py) and
+            # [B, n_prompts, width] (CLIP-AT original style)
+            if prompt.dim() == 2:
+                prompt = prompt.unsqueeze(0).expand(x.shape[0], -1, -1)
+            x = torch.cat([x, prompt.to(x.dtype)], dim=1)  # [B, grid²+1+n_prompts, width]
+
         x = self.ln_pre(x)
 
-        x = x.permute(1, 0, 2)  # NLD -> LND: [grid**2+1, N, width]
-
-        # --- Prompt injection (VPT-shallow) ---
-        if prompt is not None:
-            # prompt: [n_prompts, width] -> [n_prompts, N, width]
-            prompt_tokens = prompt.unsqueeze(1).expand(-1, x.shape[1], -1).to(x.dtype)
-            # Insert after CLS token: [CLS, p1..pK, patch1..patchM]
-            x = torch.cat([x[:1], prompt_tokens, x[1:]], dim=0)
-
+        x = x.permute(1, 0, 2)  # NLD -> LND
         x = self.transformer(x)
         x = x.permute(1, 0, 2)  # LND -> NLD
 
-        # CLS token is always at position 0
         x = self.ln_post(x[:, 0, :])
 
         if self.proj is not None:
@@ -356,12 +344,11 @@ class CLIP(nn.Module):
     def dtype(self):
         return self.visual.conv1.weight.dtype
 
-    def encode_image(self, image, prompt: torch.Tensor = None):
-        """Encode image with optional prompt tokens.
-        prompt=None  => vanilla CLIP (used by frozen branch)
-        prompt=tensor => prompted encoding (used by trainable branch)
-        """
-        return self.visual(image.type(self.dtype), prompt=prompt)
+    def encode_image(self, image, prompt=None):
+        if prompt is not None:
+            return self.visual(image.type(self.dtype), prompt.type(self.dtype))
+        else:
+            return self.visual(image.type(self.dtype))
 
     def encode_text(self, text):
         x = self.token_embedding(text).type(self.dtype)  # [batch_size, n_ctx, d_model]

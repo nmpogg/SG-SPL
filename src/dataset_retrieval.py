@@ -24,7 +24,7 @@ import os
 import glob
 import random
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageOps
 
 import torch
 from torch.utils.data import Dataset
@@ -32,40 +32,18 @@ from torchvision import transforms
 
 from src.splits import UNSEEN_CLASSES
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Image transforms
-# ─────────────────────────────────────────────────────────────────────────────
-
-def get_transform(image_size: int = 224, mode: str = 'train'):
-    """Standard CLIP-compatible image transform."""
-    normalize = transforms.Normalize(
-        mean=(0.48145466, 0.4578275,  0.40821073),
-        std= (0.26862954, 0.26130258, 0.27577711),
-    )
-    if mode == 'train':
-        return transforms.Compose([
-            transforms.Resize((image_size, image_size)),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            normalize,
-        ])
-    else:   # val / test
-        return transforms.Compose([
-            transforms.Resize((image_size, image_size)),
-            transforms.ToTensor(),
-            normalize,
-        ])
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Helpers
-# ─────────────────────────────────────────────────────────────────────────────
+def normal_transform(image_size: int = 224):
+    dataset_transforms = transforms.Compose([
+        transforms.Resize((image_size, image_size)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
+    return dataset_transforms
 
 _IMG_EXTS = ('*.png', '*.jpg', '*.jpeg', '*.JPEG', '*.PNG', '*.JPG')
 
 
-def _collect_files(directory: str) -> list:
+def collect_files(directory: str) -> list:
     """Collect all image files under a directory."""
     files = []
     for ext in _IMG_EXTS:
@@ -73,15 +51,7 @@ def _collect_files(directory: str) -> list:
     return sorted(files)
 
 
-def _load_rgb(path: str) -> Image.Image:
-    return Image.open(path).convert('RGB')
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Base dataset (triplet: sketch + positive photo + negative photo)
-# ─────────────────────────────────────────────────────────────────────────────
-
-class _BaseRetrievalDataset(Dataset):
+class BaseRetrievalDataset(Dataset):
     """
     Abstract base for sketch-photo retrieval datasets.
     Subclasses must set:
@@ -98,44 +68,43 @@ class _BaseRetrievalDataset(Dataset):
             mode:      'train' | 'val' | 'test'
             transform: torchvision transform (defaults to get_transform)
         """
-        self.opts      = opts
-        self.mode      = mode
-        self.transform = transform or get_transform(opts.image_size, mode)
-        self._build_index()
+        self.opts = opts
+        self.mode = mode
+        self.transform = transform or normal_transform(opts.image_size)
+        self.build_index()
 
-    # ── to be set by subclass ──────────────────────────────────────────────
+    # to be set by subclass
     sketch_dir: str = ''
     photo_dir:  str = ''
     seen_classes:   list = []
     unseen_classes: list = []
 
     # ──────────────────────────────────────────────────────────────────────
-    def _build_index(self):
+    def build_index(self):
         """Index all sketch/photo files for the current mode."""
         if self.mode == 'train':
             classes = self.seen_classes
         else:
             classes = self.unseen_classes
 
-        self.classes    = sorted(classes)
-        self.class2idx  = {c: i for i, c in enumerate(self.classes)}
+        self.classes = sorted(classes)
+        self.class2idx = {c: i for i, c in enumerate(self.classes)}
 
         # {class_name: [file_paths]}
-        self.sk_files  = {}
-        self.ph_files  = {}
+        self.sk_files = {}
+        self.ph_files = {}
 
         for cls in self.classes:
             sk_dir = os.path.join(self.sketch_dir, cls)
             ph_dir = os.path.join(self.photo_dir,  cls)
-            sk = _collect_files(sk_dir)
-            ph = _collect_files(ph_dir)
+            sk = collect_files(sk_dir)
+            ph = collect_files(ph_dir)
             if sk and ph:
                 self.sk_files[cls] = sk
                 self.ph_files[cls] = ph
 
         self.classes = [c for c in self.classes if c in self.sk_files]
 
-        # Flat list for __len__ — one entry per sketch
         self.items = []   # list of (sketch_path, class_name)
         for cls in self.classes:
             for sk_path in self.sk_files[cls]:
@@ -161,19 +130,23 @@ class _BaseRetrievalDataset(Dataset):
         neg_cls = random.choice([c for c in self.classes if c != cat_name])
         neg_path = random.choice(self.ph_files[neg_cls])
 
-        sk  = self.transform(_load_rgb(sk_path))
-        ph  = self.transform(_load_rgb(ph_path))
-        neg = self.transform(_load_rgb(neg_path))
+        sk_data  = ImageOps.pad(Image.open(sk_path).convert('RGB'),  size=(self.opts.image_size, self.opts.image_size))
+        ph_data = ImageOps.pad(Image.open(ph_path).convert('RGB'), size=(self.opts.image_size, self.opts.image_size))
+        neg_data = ImageOps.pad(Image.open(neg_path).convert('RGB'), size=(self.opts.image_size, self.opts.image_size))
 
-        return sk, ph, neg, cat_name, torch.tensor(cat_idx, dtype=torch.long)
+        sk_tensor  = self.transform(sk_data)
+        ph_tensor  = self.transform(ph_data)
+        neg_tensor = self.transform(neg_data)
 
-    # ── val / test helpers for retrieval evaluation ────────────────────────
+        return sk_tensor, ph_tensor, neg_tensor, cat_name, torch.tensor(cat_idx, dtype=torch.long)
 
+    # test helpers for retrieval evaluation
     def get_all_sketches(self):
         """Returns (tensor_stack, cat_names, cat_indices) for all test sketches."""
         imgs, names, idxs = [], [], []
         for sk_path, cat in self.items:
-            imgs.append(self.transform(_load_rgb(sk_path)))
+            sk_data = ImageOps.pad(Image.open(sk_path).convert('RGB'),  size=(self.opts.image_size, self.opts.image_size))
+            imgs.append(self.transform(sk_data))
             names.append(cat)
             idxs.append(self.class2idx[cat])
         return torch.stack(imgs), names, torch.tensor(idxs)
@@ -196,19 +169,15 @@ class _BaseRetrievalDataset(Dataset):
 
         for cls in gallery_classes:
             ph_dir = os.path.join(self.photo_dir, cls)
-            for ph_path in _collect_files(ph_dir):
-                imgs.append(self.transform(_load_rgb(ph_path)))
+            for ph_path in collect_files(ph_dir):
+                ph_data = ImageOps.pad(Image.open(ph_path).convert('RGB'),  size=(self.opts.image_size, self.opts.image_size))
+                imgs.append(self.transform(ph_data))
                 names.append(cls)
                 idxs.append(all_class2idx.get(cls, -1))
 
         return torch.stack(imgs), names, torch.tensor(idxs)
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Sketchy-Extended
-# ─────────────────────────────────────────────────────────────────────────────
-
-class SketchyDataset(_BaseRetrievalDataset):
+class SketchyDataset(BaseRetrievalDataset):
     """
     Sketchy-Extended dataset.
     Supports split-1 (100/25 random) and split-2 (104/21 non-ImageNet).
@@ -226,19 +195,15 @@ class SketchyDataset(_BaseRetrievalDataset):
         ])
         seen = [c for c in all_cats if c not in unseen]
 
-        self.sketch_dir     = os.path.join(data_dir, 'sketch')
-        self.photo_dir      = os.path.join(data_dir, 'photo')
-        self.seen_classes   = seen
+        self.sketch_dir = os.path.join(data_dir, 'sketch')
+        self.photo_dir = os.path.join(data_dir, 'photo')
+        self.seen_classes = seen
         self.unseen_classes = unseen
 
         super().__init__(opts, mode, transform)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# TU-Berlin-Extended
-# ─────────────────────────────────────────────────────────────────────────────
-
-class TUBerlinDataset(_BaseRetrievalDataset):
+class TUBerlinDataset(BaseRetrievalDataset):
     """TU-Berlin-Extended dataset (220 seen / 30 unseen)."""
 
     def __init__(self, opts, mode='train', transform=None):
@@ -258,12 +223,7 @@ class TUBerlinDataset(_BaseRetrievalDataset):
 
         super().__init__(opts, mode, transform)
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# QuickDraw-Extended
-# ─────────────────────────────────────────────────────────────────────────────
-
-class QuickDrawDataset(_BaseRetrievalDataset):
+class QuickDrawDataset(BaseRetrievalDataset):
     """QuickDraw-Extended dataset (80 seen / 30 unseen)."""
 
     def __init__(self, opts, mode='train', transform=None):
@@ -284,11 +244,7 @@ class QuickDrawDataset(_BaseRetrievalDataset):
         super().__init__(opts, mode, transform)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Factory
-# ─────────────────────────────────────────────────────────────────────────────
-
-_DATASET_MAP = {
+DATASET_MAP = {
     'sketchy_1': SketchyDataset,
     'sketchy_2': SketchyDataset,
     'tuberlin':  TUBerlinDataset,
@@ -304,7 +260,7 @@ def get_dataset(opts, mode: str = 'train', transform=None):
         train_ds = get_dataset(opts, mode='train')
         test_ds  = get_dataset(opts, mode='test')
     """
-    cls = _DATASET_MAP.get(opts.dataset)
+    cls = DATASET_MAP.get(opts.dataset)
     if cls is None:
-        raise ValueError(f'Unknown dataset: {opts.dataset}. Choose from {list(_DATASET_MAP)}')
+        raise ValueError(f'Unknown dataset: {opts.dataset}. Choose from {list(DATASET_MAP)}')
     return cls(opts, mode=mode, transform=transform)

@@ -36,9 +36,7 @@ import torch
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import TensorBoardLogger
 
-# Force tqdm (standard) progress bar — disable rich/notebook variants
-# Must be set BEFORE importing pytorch_lightning callbacks
-os.environ['FORCE_SIMPLE_PROGRESSBAR'] = '1'   # suppresses RichProgressBar on some PL versions
+os.environ['FORCE_SIMPLE_PROGRESSBAR'] = '1'
 
 from pytorch_lightning.callbacks import (
     ModelCheckpoint,
@@ -47,7 +45,6 @@ from pytorch_lightning.callbacks import (
 )
 from torch.utils.data import DataLoader
 
-# ── make sure repo root is on sys.path ──────────────────────────────────────
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from experiments.options import parser          # argparse parser
@@ -57,12 +54,10 @@ from src.utils import CustomProgressBar
 
 
 def main():
-    # ── 1. Parse args ─────────────────────────────────────────────────────
     opts = parser.parse_args()
 
     pl.seed_everything(opts.seed, workers=True)
 
-    # ── 2. Datasets ───────────────────────────────────────────────────────
     train_ds = get_dataset(opts, mode='train')
     val_ds   = get_dataset(opts, mode='test')
 
@@ -71,7 +66,7 @@ def main():
     train_loader = DataLoader(
         train_ds,
         batch_size   = opts.batch_size,
-        shuffle      = True,               # IMPORTANT: needed for EMA bank diversity
+        shuffle      = True,
         num_workers  = opts.num_workers,
         pin_memory   = True,
         drop_last    = True,
@@ -84,10 +79,8 @@ def main():
         pin_memory   = True,
     )
 
-    # ── 3. Model ──────────────────────────────────────────────────────────
     model = SGSPLModel(opts, seen_class_names=seen_class_names)
 
-    # ── 4. Logger ─────────────────────────────────────────────────────────
     exp_tag = (
         f'{opts.exp_name}_'
         f'{opts.dataset}_'
@@ -97,15 +90,12 @@ def main():
     )
     logger = TensorBoardLogger(save_dir=opts.log_dir, name=exp_tag)
 
-    # ── 5. Callbacks ──────────────────────────────────────────────────────
     checkpoint_cb = ModelCheckpoint(
         dirpath   = os.path.join(opts.ckpt_dir, exp_tag),
         filename  = 'epoch{epoch:03d}_mAP{mAP:.4f}',
         monitor   = 'mAP',
         mode      = 'max',
-        save_top_k = 3,
-        verbose   = False,
-        auto_insert_metric_name = False,
+        save_top_k = 1
     )
     lr_monitor = LearningRateMonitor(logging_interval='step')
     early_stop_cb = EarlyStopping(
@@ -118,7 +108,6 @@ def main():
 
     callbacks = [checkpoint_cb, lr_monitor, early_stop_cb, prog_bar]
 
-    # ── 6. Trainer (Lightning 2.6.4) ──────────────────────────────────────
     trainer = pl.Trainer(
         max_epochs         = opts.max_epochs,
         logger             = logger,
@@ -134,18 +123,15 @@ def main():
         enable_progress_bar = True,             # keep tqdm; suppress Rich
     )
 
-    # ── 7. Train ──────────────────────────────────────────────────────────
-    # Lightning 2.x: resume via ckpt_path kwarg, NOT trainer constructor
     trainer.fit(
-        model       = model,
+        model = model,
         train_dataloaders = train_loader,
-        val_dataloaders   = val_loader,
-        ckpt_path   = opts.ckpt_path,    # None = fresh start
+        val_dataloaders = val_loader,
+        ckpt_path = opts.ckpt_path
     )
 
     print(f'\n✓ Training done. Best ZS-mAP: {model.best_zs_map:.4f}')
     print(f'  Best checkpoint: {checkpoint_cb.best_model_path}')
-
 
 if __name__ == '__main__':
     main()
