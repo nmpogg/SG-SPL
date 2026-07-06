@@ -1,28 +1,9 @@
-# SG-SPL requirements
-# Pin PyTorch Lightning to 2.6.4 as decided
-
-# Core deep learning
 torch>=2.0.0
 torchvision>=0.15.0
 
-# PyTorch Lightning (pinned)
-pytorch-lightning==2.6.4
-lightning==2.6.4
+pytorch-lightning==2.6.5
+lightning==2.6.5
 
-# CLIP dependencies
-ftfy
-regex
-tqdm
-packaging
-
-# Data & compute
-numpy
-Pillow
-scipy
-
-# Logging & utils
 tensorboard
 torchmetrics>=1.0.0
 
-# PDF reading (for documentation)
-pymupdf

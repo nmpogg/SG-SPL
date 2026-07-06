@@ -104,7 +104,7 @@ def main():
         mode='max',
         verbose=False,
     )
-    prog_bar = CustomProgressBar(refresh_rate=10)
+    prog_bar = CustomProgressBar(refresh_rate=1)
 
     callbacks = [checkpoint_cb, lr_monitor, early_stop_cb, prog_bar]
 
