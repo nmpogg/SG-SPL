@@ -95,7 +95,8 @@ def main():
         filename  = 'epoch{epoch:03d}_mAP{mAP:.4f}',
         monitor   = 'mAP',
         mode      = 'max',
-        save_top_k = 1
+        save_top_k = 1,
+        save_last = True,
     )
     lr_monitor = LearningRateMonitor(logging_interval='step')
     early_stop_cb = EarlyStopping(
@@ -123,11 +124,21 @@ def main():
         enable_progress_bar = True,             # keep tqdm; suppress Rich
     )
 
+    # --- Auto Resume Logic ---
+    ckpt_path = opts.ckpt_path
+    if not ckpt_path:
+        auto_ckpt_path = os.path.join(opts.ckpt_dir, exp_tag, 'last.ckpt')
+        if os.path.exists(auto_ckpt_path):
+            ckpt_path = auto_ckpt_path
+
+    if ckpt_path:
+        print(f"\n[INFO] Resuming training from: {ckpt_path}\n")
+
     trainer.fit(
         model = model,
         train_dataloaders = train_loader,
         val_dataloaders = val_loader,
-        ckpt_path = opts.ckpt_path
+        ckpt_path = ckpt_path
     )
 
     print(f'\n✓ Training done. Best ZS-mAP: {model.best_zs_map:.4f}')

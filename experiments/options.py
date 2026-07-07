@@ -25,7 +25,7 @@ parser.add_argument('--quickdraw_dir', type=str, default='datasets/QuickDraw/',
                     help='Root of QuickDraw-Extended: must contain sketches/ and images/')
 
 # DataLoader
-parser.add_argument('--batch_size', type=int, default=192)
+parser.add_argument('--batch_size', type=int, default=64)
 parser.add_argument('--num_workers',type=int, default=4)
 parser.add_argument('--image_size', type=int, default=224)
 
@@ -44,7 +44,7 @@ parser.add_argument('--prompt_dim', type=int, default=768,
                          'NOTE: this is the internal hidden dim, NOT the output embed_dim=512.')
 
 # Optimizer
-parser.add_argument('--lr_prompt', type=float, default=1e-4, help='Learning rate for prompt parameters')
+parser.add_argument('--lr_prompt', type=float, default=1e-5, help='Learning rate for prompt parameters')
 parser.add_argument('--lr_ln', type=float, default=1e-6, help='Learning rate for CLIP LayerNorm parameters')
 # parser.add_argument('--weight_decay',type=float,default=1e-4)
 parser.add_argument('--max_epochs', type=int, default=20)
@@ -52,7 +52,7 @@ parser.add_argument('--max_epochs', type=int, default=20)
 
 # Loss weights
 # Triplet loss (always on)
-parser.add_argument('--triplet_margin', type=float, default=0.2)
+parser.add_argument('--triplet_margin', type=float, default=0.3)
 
 # L_cls — classification loss
 parser.add_argument('--l_cls', type=float, default=1.0, help='Weight for classification loss L_cls')
