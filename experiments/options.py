@@ -84,7 +84,7 @@ parser.add_argument('--no_proto_grad', action='store_true',
 
 # Text anchor templates
 parser.add_argument('--text_templates', type=str, nargs='+',
-                    default=['a photo of a {}.', 'a sketch of a {}.','a drawing of a {}.', 'an image of a {}.'],
+                    default=['a photo of a {}.'],
                     help='Templates for building text anchor matrix A')
 
 # Trainer
