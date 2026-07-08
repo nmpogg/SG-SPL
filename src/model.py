@@ -58,18 +58,22 @@ class SGSPLModel(pl.LightningModule):
         clip_model = clip_model.float()     # work in fp32 internally
         freeze_all_but_ln(clip_model)
         
-        self.clip_sk = clip_model
-        self.clip_ph = copy.deepcopy(clip_model)
+        if opts.independent_ln:
+            self.clip_sk = clip_model
+            self.clip_ph = copy.deepcopy(clip_model)
 
-        # Weight tying: share everything EXCEPT LayerNorms
-        def tie_non_ln_weights(mod_sk, mod_ph):
-            if not isinstance(mod_sk, nn.LayerNorm):
-                for name, param_sk in mod_sk.named_parameters(recurse=False):
-                    setattr(mod_ph, name, param_sk)
-            for name, child_sk in mod_sk.named_children():
-                tie_non_ln_weights(child_sk, getattr(mod_ph, name))
-                
-        tie_non_ln_weights(self.clip_sk, self.clip_ph)
+            # Weight tying: share everything EXCEPT LayerNorms
+            def tie_non_ln_weights(mod_sk, mod_ph):
+                if not isinstance(mod_sk, nn.LayerNorm):
+                    for name, param_sk in mod_sk.named_parameters(recurse=False):
+                        setattr(mod_ph, name, param_sk)
+                for name, child_sk in mod_sk.named_children():
+                    tie_non_ln_weights(child_sk, getattr(mod_ph, name))
+                    
+            tie_non_ln_weights(self.clip_sk, self.clip_ph)
+        else:
+            self.clip_sk = clip_model
+            self.clip_ph = clip_model
 
         # frozen clip for anchor + L_asym_sph
         self.clip_frozen = copy.deepcopy(clip_model)
@@ -314,8 +318,9 @@ class SGSPLModel(pl.LightningModule):
         ln_params = []
         for name, p in self.clip_sk.named_parameters():
             if p.requires_grad: ln_params.append(p)
-        for name, p in self.clip_ph.named_parameters():
-            if p.requires_grad: ln_params.append(p)
+        if self.opts.independent_ln:
+            for name, p in self.clip_ph.named_parameters():
+                if p.requires_grad: ln_params.append(p)
 
         # self.clip.logit_scale.requires_grad_(True)
         # if not any(p is self.clip.logit_scale for p in ln_params):
