@@ -182,7 +182,7 @@ class SGSPLModel(pl.LightningModule):
         loss_tri = self.loss_fn(sk_feat, ph_feat, neg_feat)
 
         # L_cls — classification loss
-        logit_scale = self.clip.logit_scale.exp()
+        logit_scale = self.clip_sk.logit_scale.exp()
         loss_cls = classification_loss(
             sk_feat       = sk_feat,
             ph_feat       = ph_feat,
