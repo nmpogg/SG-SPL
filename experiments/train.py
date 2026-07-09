@@ -101,7 +101,7 @@ def main():
     lr_monitor = LearningRateMonitor(logging_interval='step')
     early_stop_cb = EarlyStopping(
         monitor='mAP',
-        patience=3,
+        patience=5,
         mode='max',
         verbose=False,
     )
