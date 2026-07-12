@@ -41,17 +41,12 @@ from experiments.options import parser as train_parser
 # ─── Argument parsing ─────────────────────────────────────────────────────────
 
 def get_eval_args():
-    """Inherit all training opts (so we can reconstruct the model), then add eval-specific args."""
-    eval_parser = __import__('argparse').ArgumentParser(
-        parents=[train_parser],
-        add_help=True,
-        description="Re-evaluate a checkpoint with the corrected mAP@K formula."
-    )
-    eval_parser.add_argument('--ckpt_path', type=str, required=True,
-                             help='Path to the .ckpt file to evaluate.')
-    eval_parser.add_argument('--split', type=str, default='test', choices=['test', 'train'],
-                             help='Which split to evaluate on (default: test).')
-    return eval_parser.parse_args()
+    """Add eval-specific args to the existing train parser and parse."""
+    train_parser.add_argument('--ckpt_path', type=str, required=True,
+                              help='Path to the .ckpt file to evaluate.')
+    train_parser.add_argument('--split', type=str, default='test', choices=['test', 'train'],
+                              help='Which split to evaluate on (default: test).')
+    return train_parser.parse_args()
 
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
