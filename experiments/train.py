@@ -136,7 +136,7 @@ def main():
 
     trainer.validate(
         model = model,
-        val_dataloaders = val_loader,
+        dataloaders = val_loader,
         ckpt_path = ckpt_path
     )
 
