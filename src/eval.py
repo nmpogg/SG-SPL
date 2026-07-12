@@ -9,32 +9,56 @@ Metrics:
 Standard protocol:
     ZS-SBIR:  query=sketch (unseen), gallery=photo (unseen only)
     GZS-SBIR: query=sketch (unseen), gallery=photo (seen + unseen)
+
+Formula for AP@K (standard IR definition):
+    AP@K = sum_{i=1}^{K} [P(i) * rel(i)] / min(total_relevant, K)
+
+    where P(i) is Precision at rank i, rel(i)=1 if item at rank i is relevant.
+    The denominator min(total_relevant, K) penalises the model for missing
+    relevant items that did NOT make it into the top-K — which the naive
+    implementation (dividing by the number of *found* relevant items) fails to do,
+    causing mAP to appear larger than P@K, which is mathematically impossible.
 """
 
 import torch
 import torch.nn.functional as F
 
 
-def average_precision_at_k(relevant: torch.Tensor, k: int = None) -> float:
+def average_precision_at_k(
+    relevant:       torch.Tensor,   # binary [N], sorted by descending similarity
+    total_relevant: int,            # total ground-truth positives in the full gallery
+    k:              int = None,     # truncate at k (None = use all)
+) -> float:
     """
-    Compute Average Precision for a single query.
+    Compute Average Precision for a single query using the standard IR formula.
+
+        AP@K = (sum of precision-at-hit) / min(total_relevant, K)
 
     Args:
-        relevant: binary [N] tensor sorted by descending similarity,
-                  1=relevant, 0=not relevant
-        k:        truncate at k (None = use all)
+        relevant:       [N] binary tensor already sorted by descending similarity.
+        total_relevant: Total number of ground-truth positives in the FULL gallery
+                        (before any top-K truncation). Used as the denominator to
+                        correctly penalise missing relevant items outside top-K.
+        k:              Truncate ranked list at k. None = use entire list (mAP@all).
 
     Returns:
-        AP as float
+        AP as float in [0, 1].
     """
     if k is not None:
         relevant = relevant[:k]
-    n = relevant.sum().item()
-    if n == 0:
+
+    n_found = relevant.sum().item()
+    if n_found == 0:
         return 0.0
-    positions = torch.where(relevant)[0].float() + 1.0   # 1-indexed
-    precisions = torch.arange(1, n + 1, dtype=torch.float32) / positions
-    return precisions.mean().item()
+
+    # Positions (1-indexed) of relevant items in the ranked list
+    positions  = torch.where(relevant)[0].float() + 1.0       # [n_found]
+    precisions = torch.arange(1, n_found + 1, dtype=torch.float32) / positions
+
+    # Standard denominator: min(total ground-truth positives, K)
+    # Ensures AP@K <= P@K always holds.
+    denominator = min(total_relevant, k) if k is not None else total_relevant
+    return precisions.sum().item() / denominator
 
 
 def precision_at_k(relevant: torch.Tensor, k: int) -> float:
@@ -54,7 +78,7 @@ def compute_retrieval_metrics(
     """
     Compute mAP@{map_k} and P@{prec_k} for a full query/gallery set.
 
-    Returns dict with keys: 'mAP', 'P@K', 'map_k', 'prec_k'
+    Returns dict with keys: 'mAP', 'P@{prec_k}', 'map_k', 'prec_k'
     """
     sk_feats = F.normalize(sk_feats.float(), dim=-1)
     ph_feats = F.normalize(ph_feats.float(), dim=-1)
@@ -65,16 +89,18 @@ def compute_retrieval_metrics(
     # Sort gallery by descending similarity for each query
     sorted_idx = sim.argsort(dim=-1, descending=True)   # [Nq, Ng]
 
-    ap_list    = []
-    prec_list  = []
+    ap_list   = []
+    prec_list = []
 
     for q in range(sk_feats.shape[0]):
-        # Ground truth: gallery items with same class label as query
-        relevant_all = (ph_labels == sk_labels[q]).long()      # [Ng]
-        # Reorder by similarity
+        # Ground truth: gallery items with same class as query
+        relevant_all   = (ph_labels == sk_labels[q]).long()   # [Ng]
+        total_relevant = int(relevant_all.sum().item())
+
+        # Reorder by similarity score
         relevant_sorted = relevant_all[sorted_idx[q]]          # [Ng]
 
-        ap   = average_precision_at_k(relevant_sorted, k=map_k)
+        ap   = average_precision_at_k(relevant_sorted, total_relevant=total_relevant, k=map_k)
         prec = precision_at_k(relevant_sorted, k=prec_k)
 
         ap_list.append(ap)
@@ -84,10 +110,10 @@ def compute_retrieval_metrics(
     P_K = sum(prec_list) / len(prec_list)
 
     return {
-        'mAP':    mAP,
+        'mAP':         mAP,
         f'P@{prec_k}': P_K,
-        'map_k':  map_k,
-        'prec_k': prec_k,
+        'map_k':       map_k,
+        'prec_k':      prec_k,
     }
 
 
