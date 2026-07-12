@@ -41,11 +41,10 @@ from experiments.options import parser as train_parser
 # ─── Argument parsing ─────────────────────────────────────────────────────────
 
 def get_eval_args():
-    """Add eval-specific args to the existing train parser and parse."""
-    train_parser.add_argument('--ckpt_path', type=str, required=True,
-                              help='Path to the .ckpt file to evaluate.')
-    train_parser.add_argument('--split', type=str, default='test', choices=['test', 'train'],
-                              help='Which split to evaluate on (default: test).')
+    """
+    Parse args using the existing train_parser.
+    --ckpt_path and --split are already defined in experiments/options.py.
+    """
     return train_parser.parse_args()
 
 
