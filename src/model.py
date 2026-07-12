@@ -57,7 +57,23 @@ class SGSPLModel(pl.LightningModule):
         clip_model, _ = clip_module.load(opts.clip_model, device='cpu')
         clip_model = clip_model.float()     # work in fp32 internally
         freeze_all_but_ln(clip_model)
-        self.clip = clip_model
+        
+        if opts.independent_ln:
+            self.clip_sk = clip_model
+            self.clip_ph = copy.deepcopy(clip_model)
+
+            # Weight tying: share everything EXCEPT LayerNorms
+            def tie_non_ln_weights(mod_sk, mod_ph):
+                if not isinstance(mod_sk, nn.LayerNorm):
+                    for name, param_sk in mod_sk.named_parameters(recurse=False):
+                        setattr(mod_ph, name, param_sk)
+                for name, child_sk in mod_sk.named_children():
+                    tie_non_ln_weights(child_sk, getattr(mod_ph, name))
+                    
+            tie_non_ln_weights(self.clip_sk, self.clip_ph)
+        else:
+            self.clip_sk = clip_model
+            self.clip_ph = clip_model
 
         # frozen clip for anchor + L_asym_sph
         self.clip_frozen = copy.deepcopy(clip_model)
@@ -135,7 +151,9 @@ class SGSPLModel(pl.LightningModule):
         prompt = self.sk_prompt if modality == 'sketch' else self.img_prompt
         if prompt.shape[0] == 0:
             prompt = None
-        feats  = self.clip.encode_image(images, prompt=prompt.expand(images.shape[0], -1, -1))
+            
+        clip_branch = self.clip_sk if modality == 'sketch' else self.clip_ph
+        feats  = clip_branch.encode_image(images, prompt=prompt.expand(images.shape[0], -1, -1))
         feats  = feats.float()                          # fp32 for stable loss
         return F.normalize(feats, dim=-1)
 
@@ -164,7 +182,7 @@ class SGSPLModel(pl.LightningModule):
         loss_tri = self.loss_fn(sk_feat, ph_feat, neg_feat)
 
         # L_cls — classification loss
-        logit_scale = self.clip.logit_scale.exp()
+        logit_scale = self.clip_sk.logit_scale.exp()
         loss_cls = classification_loss(
             sk_feat       = sk_feat,
             ph_feat       = ph_feat,
@@ -297,10 +315,12 @@ class SGSPLModel(pl.LightningModule):
         LayerNorm parameters: lr_ln    (low  LR — fine-tune pretrained LN stats)
         """
         prompt_params = [self.sk_prompt, self.img_prompt]
-        ln_params = [
-            p for name, p in self.clip.named_parameters()
-            if p.requires_grad  # only LayerNorm weights are unfrozen
-        ]
+        ln_params = []
+        for name, p in self.clip_sk.named_parameters():
+            if p.requires_grad: ln_params.append(p)
+        if self.opts.independent_ln:
+            for name, p in self.clip_ph.named_parameters():
+                if p.requires_grad: ln_params.append(p)
 
         # self.clip.logit_scale.requires_grad_(True)
         # if not any(p is self.clip.logit_scale for p in ln_params):
