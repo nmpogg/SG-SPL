@@ -248,22 +248,22 @@ class SGSPLModel(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx, dataloader_idx=0):
         """
-        Collect sketch and photo features for retrieval evaluation.
-        We store two lists:
-          dataloader_idx=0 → ZS-SBIR  (gallery = unseen photos only)
-          dataloader_idx=1 → GZS-SBIR (gallery = seen + unseen photos)
-        """
-        sk, ph, _, _, cat_idx = batch
+        Collect features for retrieval evaluation.
 
-        sk_feat = self.forward(sk,  modality='sketch')
-        ph_feat = self.forward(ph,  modality='image')
+        Expects two separate dataloaders:
+          dataloader_idx=0 → sketch queries  : batch = (img_tensor, cat_idx)
+          dataloader_idx=1 → photo gallery   : batch = (img_tensor, cat_idx)
+        """
+        imgs, cat_idx = batch
 
         if dataloader_idx == 0:
-            self._val_sk_feats.append(sk_feat.cpu())
+            feats = self.forward(imgs, modality='sketch')
+            self._val_sk_feats.append(feats.cpu())
             self._val_sk_labels.append(cat_idx.cpu())
-        # Photo gallery is the same for both ZS and GZS
-        self._val_ph_feats.append(ph_feat.cpu())
-        self._val_ph_labels.append(cat_idx.cpu())
+        else:
+            feats = self.forward(imgs, modality='image')
+            self._val_ph_feats.append(feats.cpu())
+            self._val_ph_labels.append(cat_idx.cpu())
 
     def on_validation_epoch_end(self):
         """Compute mAP and P@K from collected validation features."""

@@ -3,10 +3,15 @@ Dataset classes for Zero-Shot Sketch-Based Image Retrieval (ZS-SBIR).
 
 Supports: Sketchy-Extended, TU-Berlin-Extended, QuickDraw-Extended.
 
-Each __getitem__ returns:
-    (sk_tensor, ph_tensor, neg_ph_tensor, cat_name, cat_idx)
-where cat_idx is the integer index into the seen/all class list —
-required for L_cls and the prototype bank.
+Training dataset (BaseRetrievalDataset, mode='train'):
+    Each __getitem__ returns:
+        (sk_tensor, ph_tensor, neg_ph_tensor, cat_name, cat_idx)
+
+Evaluation dataset (RetrievalEvalDataset):
+    Each __getitem__ returns:
+        (image_tensor, cat_idx)
+    Covers ALL sketches or ALL gallery photos without random sampling.
+    Use two separate DataLoaders (sketch + photo) for correct retrieval eval.
 
 Data directory structure expected:
     Sketchy/
@@ -250,6 +255,79 @@ DATASET_MAP = {
     'tuberlin':  TUBerlinDataset,
     'quickdraw': QuickDrawDataset,
 }
+
+
+class RetrievalEvalDataset(Dataset):
+    """
+    Flat dataset for retrieval evaluation.
+
+    Returns individual images (sketch OR photo) with their class index.
+    Covers ALL files deterministically — no random sampling.
+
+    Usage:
+        base_ds = get_dataset(opts, mode='train')   # to get seen/unseen splits
+        sk_ds = RetrievalEvalDataset(base_ds, modality='sketch')
+        ph_ds = RetrievalEvalDataset(base_ds, modality='photo', include_seen=False)
+
+    Args:
+        base_ds:      An instance of BaseRetrievalDataset (any subclass).
+        modality:     'sketch' | 'photo'
+        include_seen: If True, gallery includes seen-class photos (for GZS-SBIR).
+                      Only applies when modality='photo'.
+    """
+
+    def __init__(
+        self,
+        base_ds:      BaseRetrievalDataset,
+        modality:     str  = 'photo',
+        include_seen: bool = False,
+    ):
+        super().__init__()
+        self.transform = base_ds.transform
+        self.modality  = modality
+
+        # Build a global class index spanning seen + unseen
+        all_classes    = sorted(set(base_ds.seen_classes) | set(base_ds.unseen_classes))
+        self.class2idx = {c: i for i, c in enumerate(all_classes)}
+
+        self.items = []   # list of (file_path, cat_idx)
+
+        if modality == 'sketch':
+            # All test (unseen-class) sketches
+            for cls in sorted(base_ds.unseen_classes):
+                sk_dir = os.path.join(base_ds.sketch_dir, cls)
+                for fp in collect_files(sk_dir):
+                    self.items.append((fp, self.class2idx[cls]))
+
+        elif modality == 'photo':
+            # Gallery photos: unseen classes (+ seen if GZS-SBIR)
+            gallery_classes = list(base_ds.unseen_classes)
+            if include_seen:
+                gallery_classes += list(base_ds.seen_classes)
+            for cls in sorted(gallery_classes):
+                ph_dir = os.path.join(base_ds.photo_dir, cls)
+                for fp in collect_files(ph_dir):
+                    self.items.append((fp, self.class2idx[cls]))
+        else:
+            raise ValueError(f"modality must be 'sketch' or 'photo', got '{modality}'")
+
+        if len(self.items) == 0:
+            raise RuntimeError(
+                f'RetrievalEvalDataset: no files found for modality={modality}. '
+                f'Check data directories.'
+            )
+
+    def __len__(self):
+        return len(self.items)
+
+    def __getitem__(self, index):
+        fp, cat_idx = self.items[index]
+        img_size = self.transform.transforms[0].size
+        # size may be int or (h, w)
+        sz = img_size if isinstance(img_size, int) else img_size[0]
+        img = ImageOps.pad(Image.open(fp).convert('RGB'), size=(sz, sz))
+        return self.transform(img), torch.tensor(cat_idx, dtype=torch.long)
+
 
 
 def get_dataset(opts, mode: str = 'train', transform=None):

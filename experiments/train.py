@@ -49,7 +49,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from experiments.options import parser          # argparse parser
 from src.model import SGSPLModel
-from src.dataset_retrieval import get_dataset
+from src.dataset_retrieval import get_dataset, RetrievalEvalDataset
 from src.utils import CustomProgressBar
 
 
@@ -71,12 +71,25 @@ def main():
         pin_memory   = True,
         drop_last    = True,
     )
-    val_loader = DataLoader(
-        val_ds,
-        batch_size   = opts.batch_size,
-        shuffle      = False,
-        num_workers  = opts.num_workers,
-        pin_memory   = True,
+
+    # Evaluation: two separate loaders — sketch queries & photo gallery
+    # RetrievalEvalDataset covers ALL files deterministically (no random sampling)
+    val_sk_ds = RetrievalEvalDataset(train_ds, modality='sketch')
+    val_ph_ds = RetrievalEvalDataset(train_ds, modality='photo', include_seen=False)
+
+    val_sk_loader = DataLoader(
+        val_sk_ds,
+        batch_size  = opts.batch_size,
+        shuffle     = False,
+        num_workers = opts.num_workers,
+        pin_memory  = True,
+    )
+    val_ph_loader = DataLoader(
+        val_ph_ds,
+        batch_size  = opts.batch_size,
+        shuffle     = False,
+        num_workers = opts.num_workers,
+        pin_memory  = True,
     )
 
     model = SGSPLModel(opts, seen_class_names=seen_class_names)
@@ -134,9 +147,10 @@ def main():
     if ckpt_path:
         print(f"\n[INFO] Resuming training from: {ckpt_path}\n")
 
-    trainer.validate(
+    trainer.fit(
         model = model,
-        dataloaders = val_loader,
+        train_dataloaders = train_loader,
+        val_dataloaders = [val_sk_loader, val_ph_loader],
         ckpt_path = ckpt_path
     )
 
