@@ -134,15 +134,15 @@ def main():
     if ckpt_path:
         print(f"\n[INFO] Resuming training from: {ckpt_path}\n")
 
-    trainer.fit(
+    trainer.validate(
         model = model,
         train_dataloaders = train_loader,
         val_dataloaders = val_loader,
         ckpt_path = ckpt_path
     )
 
-    print(f'\n✓ Training done. Best ZS-mAP: {model.best_zs_map:.4f}')
-    print(f'  Best checkpoint: {checkpoint_cb.best_model_path}')
+    # print(f'\n✓ Training done. Best ZS-mAP: {model.best_zs_map:.4f}')
+    # print(f'  Best checkpoint: {checkpoint_cb.best_model_path}')
 
 if __name__ == '__main__':
     main()
