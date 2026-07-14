@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 import torch.nn.functional as F
-from torchmetrics.functional import retrieval_average_precision
+from torchmetrics.retrieval import retrieval_average_precision
 
 def retrieval_precision(preds, target, top_k):
     sorted_idx = preds.argsort(dim=-1, descending=True)
