@@ -92,6 +92,9 @@ parser.add_argument('--text_templates', type=str, nargs='+',
 
 # Trainer
 parser.add_argument('--gpus', type=int, default=1)
+parser.add_argument('--precision', type=str, default='16-mixed',
+                    choices=['32', '16-mixed', 'bf16-mixed'],
+                    help='Training precision. 16-mixed = AMP (fast); 32 = full fp32 (slow but stable)')
 parser.add_argument('--val_every', type=int, default=1, help='Run validation every N epochs')
 parser.add_argument('--sanity_steps', type=int, default=-1,
                     help='Number of validation steps to run before training (-1 for full epoch, 2 for default check, 0 to disable)')
