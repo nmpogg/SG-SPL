@@ -27,12 +27,11 @@ from src.losses import build_text_anchor, PrototypeBank, classification_loss, st
 from src.eval import compute_retrieval_metrics, get_metric_config
 
 
-def freeze_all_but_bn(m):
-    if not isinstance(m, torch.nn.LayerNorm):
-        if hasattr(m, 'weight') and m.weight is not None:
-            m.weight.requires_grad_(False)
-        if hasattr(m, 'bias') and m.bias is not None:
-            m.bias.requires_grad_(False)
+def freeze_all_but_ln(module: nn.Module):
+    for m in module.modules():
+        if not isinstance(m, nn.LayerNorm):
+            for p in m.parameters(recurse=False):
+                p.requires_grad_(False)
 
 
 class SGSPLModel(pl.LightningModule):
@@ -50,7 +49,7 @@ class SGSPLModel(pl.LightningModule):
 
         # clip for prompt tuning (trainable except LayerNorm)
         clip_model, _ = clip_module.load(opts.clip_model, device='cpu')
-        clip_model.apply(freeze_all_but_bn)
+        freeze_all_but_ln(clip_model)
         
         if opts.independent_ln:
             self.clip_sk = clip_model
@@ -269,17 +268,13 @@ class SGSPLModel(pl.LightningModule):
         zs_map = zs_metrics['mAP']
         zs_prec = zs_metrics['precision']
 
-        if map_k is None:
-            self.log('mAP@all', zs_map, prog_bar=False, on_epoch=True)
-        else:
-            self.log(f'mAP@{map_k}', zs_map, prog_bar=False, on_epoch=True)
-        
-        self.log(f'P@{prec_k}', zs_prec, prog_bar=False, on_epoch=True)
         if zs_map > self.best_zs_map:
             self.best_zs_map = zs_map
         
-        train_loss = self.trainer.callback_metrics.get('train/loss_total_epoch', torch.tensor(0.0)).item()
+        train_loss = self.trainer.callback_metrics.get('train_loss', torch.tensor(0.0)).item()
 
+        self.log('mAP', zs_map, prog_bar=False, on_epoch=True)     
+        self.log(f'precision', zs_prec, prog_bar=False, on_epoch=True)
         print(f"\nmAP@{map_k if map_k is not None else 'all'}: {zs_map:.3f}, P@{prec_k}: {zs_prec:.3f}, Best mAP: {self.best_zs_map:.4f}")
         print(f"Train loss (epoch avg): {train_loss:.6f}")
 
