@@ -266,20 +266,21 @@ class SGSPLModel(pl.LightningModule):
         )
         map_k = metric_cfg['map_k']
         prec_k = metric_cfg['prec_k']
-        if map_k is None:
-            zs_map = zs_metrics['mAP@all']
-            if zs_map > self.best_zs_map:
-                self.best_zs_map = zs_map
-            self.log('mAP@all', zs_map, prog_bar=False, on_epoch=True)
-            print(f"\nmAP@all: {zs_map}, P@{prec_k}: {zs_metrics[f'P@{prec_k}']}, Best mAP: {self.best_zs_map}")
-        else:
-            zs_map = zs_metrics['mAP@{map_k}']
-            if zs_map > self.best_zs_map:
-                self.best_zs_map = zs_map
-            self.log(f'mAP@{map_k}', zs_map, prog_bar=False, on_epoch=True)
-            print(f"\nmAP@{map_k}: {zs_map}, P@{prec_k}: {zs_metrics[f'P@{prec_k}']}, Best mAP: {self.best_zs_map}")
+        zs_map = zs_metrics['mAP']
+        zs_prec = zs_metrics['precision']
 
+        if map_k is None:
+            self.log('mAP@all', zs_map, prog_bar=False, on_epoch=True)
+        else:
+            self.log(f'mAP@{map_k}', zs_map, prog_bar=False, on_epoch=True)
+        
+        self.log(f'P@{prec_k}', zs_prec, prog_bar=False, on_epoch=True)
+        if zs_map > self.best_zs_map:
+            self.best_zs_map = zs_map
+        
         train_loss = self.trainer.callback_metrics.get('train/loss_total_epoch', torch.tensor(0.0)).item()
+        
+        print(f"\nmAP@{map_k if map_k is not None else 'all'}: {zs_map:.3f}, P@{prec_k}: {zs_prec:.3f}, Best mAP: {self.best_zs_map:.4f}")
         print(f"Train loss (epoch avg): {train_loss:.6f}")
 
         # Clear buffers

@@ -1,35 +1,23 @@
 import numpy as np
 import torch
 import torch.nn.functional as F
-from torchmetrics.functional import retrieval_average_precision, retrieval_precision
+from torchmetrics.functional import retrieval_average_precision
 
+def retrieval_precision(preds, target, top_k):
+    sorted_idx = preds.argsort(dim=-1, descending=True)
+    sorted_target = target[sorted_idx]
 
-def average_precision_at_k(relevant: torch.Tensor, k: int = None) -> float:
-    """
-    Compute Average Precision for a single query.
+    tot_pos = sorted_target.sum().item()
 
-    Args:
-        relevant: binary [N] tensor sorted by descending similarity,
-                  1=relevant, 0=not relevant
-        k:        truncate at k (None = use all)
+    if tot_pos == 0:
+        return torch.tensor(0.0, device=preds.device)
 
-    Returns:
-        AP as float
-    """
-    if k is not None:
-        relevant = relevant[:k]
-    n = relevant.sum().item()
-    if n == 0:
-        return 0.0
-    positions = torch.where(relevant)[0].float() + 1.0   # 1-indexed
-    precisions = torch.arange(1, n + 1, dtype=torch.float32) / positions
-    return precisions.mean().item()
+    if top_k is not None:
+        top = min(top_k, int(tot_pos))
+    else:
+        top = int(tot_pos)
 
-
-def precision_at_k(relevant: torch.Tensor, k: int) -> float:
-    """Precision@K for a single query."""
-    return relevant[:k].float().mean().item()
-
+    return sorted_target[:top].float().mean()
 
 @torch.no_grad()
 def compute_retrieval_metrics(
@@ -59,20 +47,12 @@ def compute_retrieval_metrics(
     mAP = torch.mean(ap)
     P_K = torch.mean(precision)
 
-    if map_k is None:
-        return {
-            'mAP@all': mAP,
-            f'P@{prec_k}': P_K,
-            'map_k': map_k,
-            'prec_k': prec_k,
-        }
-    else:
-        return {
-            f'mAP@{map_k}': mAP,
-            f'P@{prec_k}': P_K,
-            'map_k': map_k,
-            'prec_k': prec_k,
-        }
+    return {
+        'mAP': mAP,
+        'precision': P_K,
+        'map_k': map_k,
+        'prec_k': prec_k,
+    }
 
 
 def get_metric_config(dataset: str) -> dict:
