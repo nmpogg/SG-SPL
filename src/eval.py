@@ -1,18 +1,7 @@
-"""
-Evaluation metrics for ZS-SBIR and GZS-SBIR.
-
-Metrics:
-    mAP@all  — mean Average Precision over all gallery items
-    mAP@K    — mean Average Precision truncated at K (e.g. K=200)
-    P@K      — Precision at K (e.g. K=100, K=200)
-
-Standard protocol:
-    ZS-SBIR:  query=sketch (unseen), gallery=photo (unseen only)
-    GZS-SBIR: query=sketch (unseen), gallery=photo (seen + unseen)
-"""
-
+import numpy as np
 import torch
 import torch.nn.functional as F
+from torchmetrics.functional import retrieval_average_precision, retrieval_precision
 
 
 def average_precision_at_k(relevant: torch.Tensor, k: int = None) -> float:
@@ -51,51 +40,45 @@ def compute_retrieval_metrics(
     map_k:      int  = None,    # truncation for mAP (None = mAP@all)
     prec_k:     int  = 100,     # K for P@K
 ) -> dict:
-    """
-    Compute mAP@{map_k} and P@{prec_k} for a full query/gallery set.
+    
+    ap = torch.zeros(len(sk_feats))
+    precision = torch.zeros(len(sk_feats))
+    for idx, sk_feat in enumerate(sk_feats):
+        cls = sk_labels[idx]
+        distance = F.cosine_similarity(sk_feat.unsqueeze(0), ph_feats)
+        target = torch.zeros(len(ph_feats), dtype=torch.bool, device=ph_feats.device)
+        target[np.where(ph_labels == cls)] = True
 
-    Returns dict with keys: 'mAP', 'P@K', 'map_k', 'prec_k'
-    """
-    sk_feats = F.normalize(sk_feats.float(), dim=-1)
-    ph_feats = F.normalize(ph_feats.float(), dim=-1)
+        if map_k is not None:
+            ap[idx] = retrieval_average_precision(distance.cpu(), target.cpu(), top_k=map_k)
+        else:
+            ap[idx] = retrieval_average_precision(distance.cpu(), target.cpu())
+        
+        precision[idx] = retrieval_precision(distance.cpu(), target.cpu(), top_k=prec_k)
+    
+    mAP = torch.mean(ap)
+    P_K = torch.mean(precision)
 
-    # Similarity matrix [Nq, Ng]
-    sim = sk_feats @ ph_feats.t()
-
-    # Sort gallery by descending similarity for each query
-    sorted_idx = sim.argsort(dim=-1, descending=True)   # [Nq, Ng]
-
-    ap_list    = []
-    prec_list  = []
-
-    for q in range(sk_feats.shape[0]):
-        # Ground truth: gallery items with same class label as query
-        relevant_all = (ph_labels == sk_labels[q]).long()      # [Ng]
-        # Reorder by similarity
-        relevant_sorted = relevant_all[sorted_idx[q]]          # [Ng]
-
-        ap   = average_precision_at_k(relevant_sorted, k=map_k)
-        prec = precision_at_k(relevant_sorted, k=prec_k)
-
-        ap_list.append(ap)
-        prec_list.append(prec)
-
-    mAP = sum(ap_list)   / len(ap_list)
-    P_K = sum(prec_list) / len(prec_list)
-
-    return {
-        'mAP':    mAP,
-        f'P@{prec_k}': P_K,
-        'map_k':  map_k,
-        'prec_k': prec_k,
-    }
+    if map_k is None:
+        return {
+            'mAP@all': mAP,
+            f'P@{prec_k}': P_K,
+            'map_k': map_k,
+            'prec_k': prec_k,
+        }
+    else:
+        return {
+            f'mAP@{map_k}': mAP,
+            f'P@{prec_k}': P_K,
+            'map_k': map_k,
+            'prec_k': prec_k,
+        }
 
 
 def get_metric_config(dataset: str) -> dict:
     """
     Return the standard evaluation metric configuration for each dataset.
 
-    Per community protocol:
         sketchy_1 : mAP@all,  P@100
         sketchy_2 : mAP@200,  P@200
         tuberlin  : mAP@all,  P@100

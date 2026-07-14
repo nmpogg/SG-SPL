@@ -7,6 +7,7 @@ parser.add_argument('--exp_name', type=str, default='SG-SPL')
 parser.add_argument('--seed', type=int, default=42)
 parser.add_argument('--log_dir', type=str, default='logs/')
 parser.add_argument('--ckpt_dir', type=str, default='checkpoints/')
+parser.add_argument('--ckpt_path', type=str, default=None, help='Path to checkpoint for resuming training or evaluation (default: None)')
 
 # Dataset
 parser.add_argument('--dataset', type=str, default='sketchy_2',
@@ -17,15 +18,16 @@ parser.add_argument('--split', type=str, default='zs',
                     help='zs=Zero-Shot, gzs=Generalized Zero-Shot')
 
 # Paths — adjust to your data location
-parser.add_argument('--sketchy_dir', type=str, default='datasets/Sketchy/',
+parser.add_argument('--root', type=str, default='datasets/Sketchy/',
                     help='Root of Sketchy-Extended: must contain sketch/ and photo/')
-parser.add_argument('--tuberlin_dir', type=str, default='datasets/TUBerlin/',
-                    help='Root of TU-Berlin-Extended: must contain sketches/ and images/')
-parser.add_argument('--quickdraw_dir', type=str, default='datasets/QuickDraw/',
-                    help='Root of QuickDraw-Extended: must contain sketches/ and images/')
+# parser.add_argument('--tuberlin_dir', type=str, default='datasets/TUBerlin/',
+#                     help='Root of TU-Berlin-Extended: must contain sketches/ and images/')
+# parser.add_argument('--quickdraw_dir', type=str, default='datasets/QuickDraw/',
+#                     help='Root of QuickDraw-Extended: must contain sketches/ and images/')
 
 # DataLoader
 parser.add_argument('--batch_size', type=int, default=64)
+parser.add_argument('--test_batch_size', type=int, default=256)
 parser.add_argument('--num_workers',type=int, default=4)
 parser.add_argument('--image_size', type=int, default=224)
 
@@ -90,12 +92,8 @@ parser.add_argument('--text_templates', type=str, nargs='+',
 
 # Trainer
 parser.add_argument('--gpus', type=int, default=1)
-parser.add_argument('--precision', type=str, default='16-mixed', choices=['32', '16-mixed', 'bf16-mixed'])
-parser.add_argument('--grad_clip', type=float, default=1.0)
 parser.add_argument('--val_every', type=int, default=1, help='Run validation every N epochs')
 parser.add_argument('--sanity_steps', type=int, default=-1,
                     help='Number of validation steps to run before training (-1 for full epoch, 2 for default check, 0 to disable)')
-parser.add_argument('--ckpt_path',  type=str, default=None,
-                    help='Path to checkpoint to resume from (Lightning 2.x style)')
 
 opts = parser.parse_args(args=[])  # default options; override via CLI in train.py

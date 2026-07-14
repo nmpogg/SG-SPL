@@ -22,22 +22,17 @@ import torch.nn as nn
 import torch.nn.functional as F
 import pytorch_lightning as pl
 
-import clip as clip_module                       # our clip/ package
-from src.losses import (
-    build_text_anchor,
-    PrototypeBank,
-    classification_loss,
-    structural_losses,
-    asym_spherical_loss,
-)
+import clip as clip_module
+from src.losses import build_text_anchor, PrototypeBank, classification_loss, structural_losses, asym_spherical_loss
 from src.eval import compute_retrieval_metrics, get_metric_config
 
 
-def freeze_all_but_ln(module: nn.Module):
-    for m in module.modules():
-        if not isinstance(m, nn.LayerNorm):
-            for p in m.parameters(recurse=False):
-                p.requires_grad_(False)
+def freeze_all_but_bn(m):
+    if not isinstance(m, torch.nn.LayerNorm):
+        if hasattr(m, 'weight') and m.weight is not None:
+            m.weight.requires_grad_(False)
+        if hasattr(m, 'bias') and m.bias is not None:
+            m.bias.requires_grad_(False)
 
 
 class SGSPLModel(pl.LightningModule):
@@ -55,8 +50,7 @@ class SGSPLModel(pl.LightningModule):
 
         # clip for prompt tuning (trainable except LayerNorm)
         clip_model, _ = clip_module.load(opts.clip_model, device='cpu')
-        clip_model = clip_model.float()     # work in fp32 internally
-        freeze_all_but_ln(clip_model)
+        clip_model.apply(freeze_all_but_bn)
         
         if opts.independent_ln:
             self.clip_sk = clip_model
@@ -87,7 +81,7 @@ class SGSPLModel(pl.LightningModule):
 
         # Triplet loss (CLIP-AT baseline)
         self.distance_fn = lambda x, y: 1.0 - F.cosine_similarity(x, y)
-        self.loss_fn = nn.TripletMarginWithDistanceLoss(
+        self.loss_tri = nn.TripletMarginWithDistanceLoss(
             distance_function=self.distance_fn,
             margin=opts.triplet_margin,
         )
@@ -179,7 +173,7 @@ class SGSPLModel(pl.LightningModule):
         neg_feat = self.forward(neg, modality='image')     # [B, D]
 
         # Triplet loss (CLIP-AT baseline)
-        loss_tri = self.loss_fn(sk_feat, ph_feat, neg_feat)
+        loss_tri = self.loss_tri(sk_feat, ph_feat, neg_feat)
 
         # L_cls — classification loss
         logit_scale = self.clip_sk.logit_scale.exp()
@@ -230,15 +224,7 @@ class SGSPLModel(pl.LightningModule):
             + loss_sph
         )
 
-        self.log_dict({
-            'train/loss_tri':   loss_tri,
-            'train/loss_cls':   loss_cls,
-            'train/loss_ssc':   loss_ssc,
-            'train/loss_xmod':  loss_xmod,
-            'train/loss_sph':   loss_sph,
-            'train/loss_total': loss,
-            'train/n_protos':   float(self.bank.proto_mask.sum().item()),
-        }, on_step=True, on_epoch=True, prog_bar=False, batch_size=sk.size(0))
+        self.log('train_loss', loss, on_step=False, on_epoch=True)
 
         return loss
 
@@ -247,13 +233,6 @@ class SGSPLModel(pl.LightningModule):
     # ──────────────────────────────────────────────────────────────────────────
 
     def validation_step(self, batch, batch_idx, dataloader_idx=0):
-        """
-        Collect features for retrieval evaluation.
-
-        Expects two separate dataloaders:
-          dataloader_idx=0 → sketch queries  : batch = (img_tensor, cat_idx)
-          dataloader_idx=1 → photo gallery   : batch = (img_tensor, cat_idx)
-        """
         imgs, cat_idx = batch
 
         if dataloader_idx == 0:
@@ -285,21 +264,22 @@ class SGSPLModel(pl.LightningModule):
             ph_labels = ph_labels,
             **metric_cfg,
         )
-
-        zs_map = zs_metrics['mAP']
+        map_k = metric_cfg['map_k']
         prec_k = metric_cfg['prec_k']
-
-        self.log_dict({
-            'mAP':   zs_map,
-            f'P@{prec_k}': zs_metrics[f'P@{prec_k}'],
-        }, prog_bar=False, on_epoch=True)
-
-        if zs_map > self.best_zs_map:
-            self.best_zs_map = zs_map
-            self.log('best_mAP', self.best_zs_map, prog_bar=False, on_epoch=True)
+        if map_k is None:
+            zs_map = zs_metrics['mAP@all']
+            if zs_map > self.best_zs_map:
+                self.best_zs_map = zs_map
+            self.log('mAP@all', zs_map, prog_bar=False, on_epoch=True)
+            print(f"\nmAP@all: {zs_map}, P@{prec_k}: {zs_metrics[f'P@{prec_k}']}, Best mAP: {self.best_zs_map}")
+        else:
+            zs_map = zs_metrics['mAP@{map_k}']
+            if zs_map > self.best_zs_map:
+                self.best_zs_map = zs_map
+            self.log(f'mAP@{map_k}', zs_map, prog_bar=False, on_epoch=True)
+            print(f"\nmAP@{map_k}: {zs_map}, P@{prec_k}: {zs_metrics[f'P@{prec_k}']}, Best mAP: {self.best_zs_map}")
 
         train_loss = self.trainer.callback_metrics.get('train/loss_total_epoch', torch.tensor(0.0)).item()
-        print(f"\nmAP@{prec_k}: {zs_map}, P@{prec_k}: {zs_metrics[f'P@{prec_k}']}, Best mAP: {self.best_zs_map}")
         print(f"Train loss (epoch avg): {train_loss:.6f}")
 
         # Clear buffers
