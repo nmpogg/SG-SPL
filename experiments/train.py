@@ -80,6 +80,7 @@ def main():
         max_epochs = opts.max_epochs,
         benchmark = True,
         logger = logger,
+        gpus = opts.gpus,
         callbacks = callbacks,
         check_val_every_n_epoch = opts.val_every,
         num_sanity_val_steps = opts.sanity_steps

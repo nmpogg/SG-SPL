@@ -164,7 +164,7 @@ class SGSPLModel(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         self._ensure_anchor()
 
-        sk, img, neg, cat_name, cat_idx = batch
+        sk, img, neg, cat_idx = batch
         # cat_idx: [B] integer indices into self.seen_class_names
 
         # Encode with prompted CLIP
@@ -279,7 +279,7 @@ class SGSPLModel(pl.LightningModule):
             self.best_zs_map = zs_map
         
         train_loss = self.trainer.callback_metrics.get('train/loss_total_epoch', torch.tensor(0.0)).item()
-        
+
         print(f"\nmAP@{map_k if map_k is not None else 'all'}: {zs_map:.3f}, P@{prec_k}: {zs_prec:.3f}, Best mAP: {self.best_zs_map:.4f}")
         print(f"Train loss (epoch avg): {train_loss:.6f}")
 
