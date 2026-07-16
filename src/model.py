@@ -307,7 +307,7 @@ class SGSPLModel(pl.LightningModule):
         #     {'params': ln_params,     'lr': self.opts.lr_ln},
         # ], weight_decay=self.opts.weight_decay)
 
-        optimizer = torch.optim.Adam([
+        optimizer = torch.optim.SGD([
             {'params': prompt_params, 'lr': self.opts.lr_prompt},
             {'params': ln_params,     'lr': self.opts.lr_ln},
         ])
