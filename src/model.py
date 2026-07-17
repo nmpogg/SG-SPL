@@ -64,6 +64,26 @@ class SGSPLModel(pl.LightningModule):
                     tie_non_ln_weights(child_sk, getattr(mod_ph, name))
                     
             tie_non_ln_weights(self.clip_sk, self.clip_ph)
+
+            # ── Verify weight tying ──────────────────────────────────────────
+            # Non-LN weights must share the same tensor (same id)
+            # LN weights must be DIFFERENT tensors (independent)
+            _block_sk = self.clip_sk.visual.transformer.resblocks[0]
+            _block_ph = self.clip_ph.visual.transformer.resblocks[0]
+            _attn_tied   = id(_block_sk.attn.out_proj.weight) == id(_block_ph.attn.out_proj.weight)
+            _ln_indep    = id(_block_sk.ln_1.weight)          != id(_block_ph.ln_1.weight)
+            if _attn_tied and _ln_indep:
+                print("[independent_ln] ✓ Weight tying OK: attn shared, LayerNorm independent")
+            else:
+                problems = []
+                if not _attn_tied: problems.append("attn.out_proj.weight NOT shared")
+                if not _ln_indep:  problems.append("ln_1.weight NOT independent")
+                raise RuntimeError(
+                    f"[independent_ln] Weight tying FAILED: {'; '.join(problems)}\n"
+                    "clip_sk and clip_ph may be fully independent → double compute!"
+                )
+            # ─────────────────────────────────────────────────────────────────
+
         else:
             self.clip_sk = clip_model
             self.clip_ph = clip_model
