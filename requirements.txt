@@ -7,3 +7,5 @@ lightning==2.6.5
 tensorboard
 torchmetrics>=1.0.0
 
+ftfy
+bresenham

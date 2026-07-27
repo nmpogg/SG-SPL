@@ -22,14 +22,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import pytorch_lightning as pl
 
-import clip as clip_module                       # our clip/ package
-from src.losses import (
-    build_text_anchor,
-    PrototypeBank,
-    classification_loss,
-    structural_losses,
-    asym_spherical_loss,
-)
+import clip as clip_module
+from src.losses import build_text_anchor, PrototypeBank, classification_loss, structural_losses, asym_spherical_loss
 from src.eval import compute_retrieval_metrics, get_metric_config
 
 
@@ -55,7 +49,6 @@ class SGSPLModel(pl.LightningModule):
 
         # clip for prompt tuning (trainable except LayerNorm)
         clip_model, _ = clip_module.load(opts.clip_model, device='cpu')
-        clip_model = clip_model.float()     # work in fp32 internally
         freeze_all_but_ln(clip_model)
         
         if opts.independent_ln:
@@ -71,6 +64,26 @@ class SGSPLModel(pl.LightningModule):
                     tie_non_ln_weights(child_sk, getattr(mod_ph, name))
                     
             tie_non_ln_weights(self.clip_sk, self.clip_ph)
+
+            # ── Verify weight tying ──────────────────────────────────────────
+            # Non-LN weights must share the same tensor (same id)
+            # LN weights must be DIFFERENT tensors (independent)
+            _block_sk = self.clip_sk.visual.transformer.resblocks[0]
+            _block_ph = self.clip_ph.visual.transformer.resblocks[0]
+            _attn_tied   = id(_block_sk.attn.out_proj.weight) == id(_block_ph.attn.out_proj.weight)
+            _ln_indep    = id(_block_sk.ln_1.weight)          != id(_block_ph.ln_1.weight)
+            if _attn_tied and _ln_indep:
+                print("[independent_ln] ✓ Weight tying OK: attn shared, LayerNorm independent")
+            else:
+                problems = []
+                if not _attn_tied: problems.append("attn.out_proj.weight NOT shared")
+                if not _ln_indep:  problems.append("ln_1.weight NOT independent")
+                raise RuntimeError(
+                    f"[independent_ln] Weight tying FAILED: {'; '.join(problems)}\n"
+                    "clip_sk and clip_ph may be fully independent → double compute!"
+                )
+            # ─────────────────────────────────────────────────────────────────
+
         else:
             self.clip_sk = clip_model
             self.clip_ph = clip_model
@@ -87,7 +100,7 @@ class SGSPLModel(pl.LightningModule):
 
         # Triplet loss (CLIP-AT baseline)
         self.distance_fn = lambda x, y: 1.0 - F.cosine_similarity(x, y)
-        self.loss_fn = nn.TripletMarginWithDistanceLoss(
+        self.loss_tri = nn.TripletMarginWithDistanceLoss(
             distance_function=self.distance_fn,
             margin=opts.triplet_margin,
         )
@@ -170,7 +183,7 @@ class SGSPLModel(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         self._ensure_anchor()
 
-        sk, img, neg, cat_name, cat_idx = batch
+        sk, img, neg, cat_idx = batch
         # cat_idx: [B] integer indices into self.seen_class_names
 
         # Encode with prompted CLIP
@@ -179,7 +192,7 @@ class SGSPLModel(pl.LightningModule):
         neg_feat = self.forward(neg, modality='image')     # [B, D]
 
         # Triplet loss (CLIP-AT baseline)
-        loss_tri = self.loss_fn(sk_feat, ph_feat, neg_feat)
+        loss_tri = self.loss_tri(sk_feat, ph_feat, neg_feat)
 
         # L_cls — classification loss
         logit_scale = self.clip_sk.logit_scale.exp()
@@ -230,15 +243,7 @@ class SGSPLModel(pl.LightningModule):
             + loss_sph
         )
 
-        self.log_dict({
-            'train/loss_tri':   loss_tri,
-            'train/loss_cls':   loss_cls,
-            'train/loss_ssc':   loss_ssc,
-            'train/loss_xmod':  loss_xmod,
-            'train/loss_sph':   loss_sph,
-            'train/loss_total': loss,
-            'train/n_protos':   float(self.bank.proto_mask.sum().item()),
-        }, on_step=True, on_epoch=True, prog_bar=False, batch_size=sk.size(0))
+        self.log('train_loss', loss, on_step=False, on_epoch=True)
 
         return loss
 
@@ -247,23 +252,16 @@ class SGSPLModel(pl.LightningModule):
     # ──────────────────────────────────────────────────────────────────────────
 
     def validation_step(self, batch, batch_idx, dataloader_idx=0):
-        """
-        Collect sketch and photo features for retrieval evaluation.
-        We store two lists:
-          dataloader_idx=0 → ZS-SBIR  (gallery = unseen photos only)
-          dataloader_idx=1 → GZS-SBIR (gallery = seen + unseen photos)
-        """
-        sk, ph, _, _, cat_idx = batch
-
-        sk_feat = self.forward(sk,  modality='sketch')
-        ph_feat = self.forward(ph,  modality='image')
+        imgs, cat_idx = batch
 
         if dataloader_idx == 0:
-            self._val_sk_feats.append(sk_feat.cpu())
+            feats = self.forward(imgs, modality='sketch')
+            self._val_sk_feats.append(feats.cpu())
             self._val_sk_labels.append(cat_idx.cpu())
-        # Photo gallery is the same for both ZS and GZS
-        self._val_ph_feats.append(ph_feat.cpu())
-        self._val_ph_labels.append(cat_idx.cpu())
+        else:
+            feats = self.forward(imgs, modality='image')
+            self._val_ph_feats.append(feats.cpu())
+            self._val_ph_labels.append(cat_idx.cpu())
 
     def on_validation_epoch_end(self):
         """Compute mAP and P@K from collected validation features."""
@@ -285,21 +283,19 @@ class SGSPLModel(pl.LightningModule):
             ph_labels = ph_labels,
             **metric_cfg,
         )
-
-        zs_map = zs_metrics['mAP']
+        map_k = metric_cfg['map_k']
         prec_k = metric_cfg['prec_k']
-
-        self.log_dict({
-            'mAP':   zs_map,
-            f'P@{prec_k}': zs_metrics[f'P@{prec_k}'],
-        }, prog_bar=False, on_epoch=True)
+        zs_map = zs_metrics['mAP']
+        zs_prec = zs_metrics['precision']
 
         if zs_map > self.best_zs_map:
             self.best_zs_map = zs_map
-            self.log('best_mAP', self.best_zs_map, prog_bar=False, on_epoch=True)
+        
+        train_loss = self.trainer.callback_metrics.get('train_loss', torch.tensor(0.0)).item()
 
-        train_loss = self.trainer.callback_metrics.get('train/loss_total_epoch', torch.tensor(0.0)).item()
-        print(f"\nmAP@{prec_k}: {zs_map}, P@{prec_k}: {zs_metrics[f'P@{prec_k}']}, Best mAP: {self.best_zs_map}")
+        self.log('mAP', zs_map, prog_bar=False, on_epoch=True)     
+        self.log(f'precision', zs_prec, prog_bar=False, on_epoch=True)
+        print(f"\nmAP@{map_k if map_k is not None else 'all'}: {zs_map:.3f}, P@{prec_k}: {zs_prec:.3f}, Best mAP: {self.best_zs_map:.4f}")
         print(f"Train loss (epoch avg): {train_loss:.6f}")
 
         # Clear buffers
