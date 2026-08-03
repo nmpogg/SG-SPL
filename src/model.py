@@ -27,21 +27,23 @@ from src.losses import build_text_anchor, PrototypeBank, classification_loss, st
 from src.eval import compute_retrieval_metrics, get_metric_config
 
 
-def freeze_all_but_ln(module: nn.Module):
-    for m in module.modules():
-        if not isinstance(m, nn.LayerNorm):
-            for p in m.parameters(recurse=False):
-                p.requires_grad_(False)
+# def freeze_all_but_ln(module: nn.Module):
+#     for m in module.modules():
+#         if not isinstance(m, nn.LayerNorm):
+#             for p in m.parameters(recurse=False):
+#                 p.requires_grad_(False)
 
+def freeze_all_but_ln(module):
+    """Freeze an encoder, then enable only its LayerNorm parameters."""
+    module.requires_grad_(False)
+    for child in module.modules():
+        if isinstance(child, torch.nn.LayerNorm):
+            child.requires_grad_(True)
 
 class SGSPLModel(pl.LightningModule):
 
     def __init__(self, opts, seen_class_names: list):
-        """
-        Args:
-            opts:              argparse namespace (from experiments/options.py)
-            seen_class_names:  list of seen (train) class name strings
-        """
+
         super().__init__()
         self.opts = opts
         self.seen_class_names = seen_class_names
@@ -231,15 +233,15 @@ class SGSPLModel(pl.LightningModule):
             ph_feat   = ph_feat,
             sk_anchor = sk_anchor,
             ph_anchor = ph_anchor,
-            l_sph_ph  = self.opts.l_sph_ph,
-            l_sph_sk  = self.opts.l_sph_sk,
+            l_sph_ph  = self.opts.sph_ph_weight,
+            l_sph_sk  = self.opts.sph_sk_weight,
         )
 
         # Total loss
         loss = (
-            loss_tri
-            + self.opts.l_cls * loss_cls
-            + self.opts.l_ssc * (loss_ssc + self.opts.l_x * loss_xmod)
+            self.opts.triplet_weight * loss_tri
+            + self.opts.classification_weight * loss_cls
+            + self.opts.ssc_weight * (loss_ssc + self.opts.xmod_weight * loss_xmod)
             + loss_sph
         )
 
