@@ -30,27 +30,23 @@ def main():
     seen_class_names = train_ds.seen_classes
 
     train_loader = DataLoader(
-        train_ds,
-        batch_size   = opts.batch_size,
-        shuffle      = True,
-        num_workers  = opts.num_workers,
-        pin_memory   = True,
-        drop_last    = True,
+        dataset = train_ds,
+        batch_size = opts.batch_size,
+        shuffle = True,
+        num_workers = opts.num_workers
     )
 
     val_sk_loader = DataLoader(
-        val_sk_ds,
-        batch_size  = opts.test_batch_size,
-        shuffle     = False,
-        num_workers = opts.num_workers,
-        pin_memory  = True,
+        dataset = val_sk_ds,
+        batch_size = opts.test_batch_size,
+        shuffle = False,
+        num_workers = opts.num_workers
     )
     val_ph_loader = DataLoader(
-        val_ph_ds,
-        batch_size  = opts.test_batch_size,
-        shuffle     = False,
-        num_workers = opts.num_workers,
-        pin_memory  = True,
+        dataset = val_ph_ds,
+        batch_size = opts.test_batch_size,
+        shuffle = False,
+        num_workers = opts.num_workers
     )
 
     model = SGSPLModel(opts, seen_class_names=seen_class_names)
@@ -78,11 +74,11 @@ def main():
     trainer = pl.Trainer(
         min_epochs = 1,
         max_epochs = opts.max_epochs,
-        benchmark = True,
+        benchmark = False,
+        deterministic=True,
         logger = logger,
         accelerator = 'gpu',
         devices = opts.gpus,
-        precision = opts.precision,
         callbacks = callbacks,
         check_val_every_n_epoch = opts.val_every,
         num_sanity_val_steps = opts.sanity_steps
