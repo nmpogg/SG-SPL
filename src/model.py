@@ -52,7 +52,7 @@ class SGSPLModel(pl.LightningModule):
         clip_model, _ = clip.load(opts.clip_model, device='cpu')
         clip_model.requires_grad_(False)
 
-        if opts.separate_visual:
+        if opts.independent_ln:
             
             self.clip_sk = clip_model
             self.clip_ph = copy.deepcopy(clip_model)
