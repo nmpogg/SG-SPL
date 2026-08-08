@@ -56,23 +56,24 @@ parser.add_argument('--independent_ln', action='store_true', help='Use branch-sp
 # Loss weights
 # Triplet loss (always on)
 parser.add_argument('--triplet_margin', type=float, default=0.3)
+parser.add_argument('--triplet_weight', type=float, default=1, help="Weight for triplet loss L_tri")
 
 # L_cls — classification loss
-parser.add_argument('--l_cls', type=float, default=1.0, help='Weight for classification loss L_cls')
+parser.add_argument('--classification_weight', type=float, default=0.5, help='Weight for classification loss L_cls')
 
 # L_SSC — Semantic Structure Consistency
-parser.add_argument('--l_ssc', type=float, default=1.0, help='Weight for L_SSC (set 0 to disable)')
+parser.add_argument('--ssc_weight', type=float, default=1.0, help='Weight for L_SSC (set 0 to disable)')
 parser.add_argument('--ssc_dist', type=str, default='mse', choices=['mse', 'kl'],
                     help='Distance function for L_SSC: mse (EBSeg original) or kl')
 parser.add_argument('--ssc_temp', type=float, default=0.1, help='Temperature T for KL variant of L_SSC')
 
 # L_xmod — Cross-modal Structure Consistency
-parser.add_argument('--l_x', type=float, default=0.5, help='Weight for L_xmod inside L_SSC term (set 0 to ablate xmod)')
+parser.add_argument('--xmod_weight', type=float, default=0.5, help='Weight for L_xmod inside L_SSC term (set 0 to ablate xmod)')
 
 # L_asym_sph — Asymmetric Hyperspherical Anchoring
-parser.add_argument('--l_sph_ph', type=float, default=1.0,
+parser.add_argument('--sph_ph_weight', type=float, default=1.0,
                     help='lambda_ph: anchor weight for photo modality (stronger)')
-parser.add_argument('--l_sph_sk', type=float, default=0.2,
+parser.add_argument('--sph_sk_weight', type=float, default=0.2,
                     help='lambda_sk: anchor weight for sketch modality (weaker → let sketch adapt)')
 
 

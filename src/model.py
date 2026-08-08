@@ -22,71 +22,49 @@ import torch.nn as nn
 import torch.nn.functional as F
 import pytorch_lightning as pl
 
-import clip as clip_module
+import clip
 from src.losses import build_text_anchor, PrototypeBank, classification_loss, structural_losses, asym_spherical_loss
 from src.eval import compute_retrieval_metrics, get_metric_config
 
 
-def freeze_all_but_ln(module: nn.Module):
-    for m in module.modules():
-        if not isinstance(m, nn.LayerNorm):
-            for p in m.parameters(recurse=False):
-                p.requires_grad_(False)
+# def freeze_all_but_ln(module: nn.Module):
+#     for m in module.modules():
+#         if not isinstance(m, nn.LayerNorm):
+#             for p in m.parameters(recurse=False):
+#                 p.requires_grad_(False)
 
+def freeze_all_but_ln(module):
+    """Freeze an encoder, then enable only its LayerNorm parameters."""
+    module.requires_grad_(False)
+    for child in module.modules():
+        if isinstance(child, torch.nn.LayerNorm):
+            child.requires_grad_(True)
 
 class SGSPLModel(pl.LightningModule):
 
     def __init__(self, opts, seen_class_names: list):
-        """
-        Args:
-            opts:              argparse namespace (from experiments/options.py)
-            seen_class_names:  list of seen (train) class name strings
-        """
+
         super().__init__()
         self.opts = opts
         self.seen_class_names = seen_class_names
         self.n_seen = len(seen_class_names)
 
-        # clip for prompt tuning (trainable except LayerNorm)
-        clip_model, _ = clip_module.load(opts.clip_model, device='cpu')
-        freeze_all_but_ln(clip_model)
-        
+        clip_model, _ = clip.load(opts.clip_model, device='cpu')
+        clip_model.requires_grad_(False)
+
         if opts.independent_ln:
+            
             self.clip_sk = clip_model
             self.clip_ph = copy.deepcopy(clip_model)
-
-            # Weight tying: share everything EXCEPT LayerNorms
-            def tie_non_ln_weights(mod_sk, mod_ph):
-                if not isinstance(mod_sk, nn.LayerNorm):
-                    for name, param_sk in mod_sk.named_parameters(recurse=False):
-                        setattr(mod_ph, name, param_sk)
-                for name, child_sk in mod_sk.named_children():
-                    tie_non_ln_weights(child_sk, getattr(mod_ph, name))
-                    
-            tie_non_ln_weights(self.clip_sk, self.clip_ph)
-
-            # ── Verify weight tying ──────────────────────────────────────────
-            # Non-LN weights must share the same tensor (same id)
-            # LN weights must be DIFFERENT tensors (independent)
-            _block_sk = self.clip_sk.visual.transformer.resblocks[0]
-            _block_ph = self.clip_ph.visual.transformer.resblocks[0]
-            _attn_tied   = id(_block_sk.attn.out_proj.weight) == id(_block_ph.attn.out_proj.weight)
-            _ln_indep    = id(_block_sk.ln_1.weight)          != id(_block_ph.ln_1.weight)
-            if _attn_tied and _ln_indep:
-                print("[independent_ln] ✓ Weight tying OK: attn shared, LayerNorm independent")
-            else:
-                problems = []
-                if not _attn_tied: problems.append("attn.out_proj.weight NOT shared")
-                if not _ln_indep:  problems.append("ln_1.weight NOT independent")
-                raise RuntimeError(
-                    f"[independent_ln] Weight tying FAILED: {'; '.join(problems)}\n"
-                    "clip_sk and clip_ph may be fully independent → double compute!"
-                )
-            # ─────────────────────────────────────────────────────────────────
-
+            freeze_all_but_ln(self.clip_sk.visual)
+            freeze_all_but_ln(self.clip_ph.visual)
+            print("[CLIP] separate_visual=True  → sk and ph have independent visual encoders")
         else:
+            
             self.clip_sk = clip_model
             self.clip_ph = clip_model
+            freeze_all_but_ln(self.clip_sk.visual)
+            print("[CLIP] separate_visual=False → sk and ph share one visual encoder")
 
         # frozen clip for anchor + L_asym_sph
         self.clip_frozen = copy.deepcopy(clip_model)
@@ -231,15 +209,15 @@ class SGSPLModel(pl.LightningModule):
             ph_feat   = ph_feat,
             sk_anchor = sk_anchor,
             ph_anchor = ph_anchor,
-            l_sph_ph  = self.opts.l_sph_ph,
-            l_sph_sk  = self.opts.l_sph_sk,
+            l_sph_ph  = self.opts.sph_ph_weight,
+            l_sph_sk  = self.opts.sph_sk_weight,
         )
 
         # Total loss
         loss = (
-            loss_tri
-            + self.opts.l_cls * loss_cls
-            + self.opts.l_ssc * (loss_ssc + self.opts.l_x * loss_xmod)
+            self.opts.triplet_weight * loss_tri
+            + self.opts.classification_weight * loss_cls
+            + self.opts.ssc_weight * (loss_ssc + self.opts.xmod_weight * loss_xmod)
             + loss_sph
         )
 
@@ -295,7 +273,7 @@ class SGSPLModel(pl.LightningModule):
 
         self.log('mAP', zs_map, prog_bar=False, on_epoch=True)     
         self.log(f'precision', zs_prec, prog_bar=False, on_epoch=True)
-        print(f"\nmAP@{map_k if map_k is not None else 'all'}: {zs_map:.3f}, P@{prec_k}: {zs_prec:.3f}, Best mAP: {self.best_zs_map:.4f}")
+        print(f"\nmAP@{map_k if map_k is not None else 'all'}: {zs_map:.3f}, P@{prec_k}: {zs_prec:.3f}, Best mAP: {self.best_zs_map:.3f}")
         print(f"Train loss (epoch avg): {train_loss:.6f}")
 
         # Clear buffers
@@ -311,12 +289,15 @@ class SGSPLModel(pl.LightningModule):
         LayerNorm parameters: lr_ln    (low  LR — fine-tune pretrained LN stats)
         """
         prompt_params = [self.sk_prompt, self.img_prompt]
-        ln_params = []
-        for name, p in self.clip_sk.named_parameters():
-            if p.requires_grad: ln_params.append(p)
-        if self.opts.independent_ln:
-            for name, p in self.clip_ph.named_parameters():
-                if p.requires_grad: ln_params.append(p)
+
+        ln_params  = []
+        seen_p_ids = set()
+        for branch_visual in {id(self.clip_sk.visual): self.clip_sk.visual,
+                              id(self.clip_ph.visual): self.clip_ph.visual}.values():
+            for p in branch_visual.parameters():
+                if p.requires_grad and id(p) not in seen_p_ids:
+                    ln_params.append(p)
+                    seen_p_ids.add(id(p))
 
         # self.clip.logit_scale.requires_grad_(True)
         # if not any(p is self.clip.logit_scale for p in ln_params):

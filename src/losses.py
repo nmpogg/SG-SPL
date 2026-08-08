@@ -173,7 +173,7 @@ def classification_loss(
     logits_sk  = logit_scale * sk_n  @ text_n.t()   # [B, C_s]
     logits_ph  = logit_scale * ph_n  @ text_n.t()   # [B, C_s]
 
-    loss = 0.5 * (
+    loss = (
         F.cross_entropy(logits_sk,  cat_idx) +
         F.cross_entropy(logits_ph, cat_idx)
     )
