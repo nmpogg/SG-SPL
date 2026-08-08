@@ -24,7 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from torch.utils.data import DataLoader
 from src.model import SGSPLModel
-from src.dataset_retrieval import get_dataset, RetrievalEvalDataset
+from src.dataset_retrieval import TrainDataset, ValDataset
 from src.eval import compute_retrieval_metrics, get_metric_config
 from experiments.options import parser as train_parser
 
@@ -47,11 +47,11 @@ def run_evaluation(opts):
 
     # ── Build datasets ─────────────────────────────────────────────────────────
     print(f"\n[INFO] Loading dataset: {opts.dataset}")
-    # train_ds provides seen/unseen class splits for RetrievalEvalDataset
-    train_ds = get_dataset(opts, mode='train')
+    # train_ds provides seen_classes which is needed for the model
+    train_ds = TrainDataset(opts)
 
-    val_sk_ds = RetrievalEvalDataset(train_ds, modality='sketch')
-    val_ph_ds = RetrievalEvalDataset(train_ds, modality='photo', include_seen=False)
+    val_sk_ds = ValDataset(opts, modality='sketch')
+    val_ph_ds = ValDataset(opts, modality='photo')
 
     print(f"         Sketch queries : {len(val_sk_ds):,}")
     print(f"         Photo gallery  : {len(val_ph_ds):,}")
