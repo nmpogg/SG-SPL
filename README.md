@@ -41,4 +41,4 @@ Lệnh sau chạy CLIP-AT kiểu prompt tuning với chỉ `L_triplet` + `L_cls`
 - `--lr_prompt`: Learning rate áp dụng riêng cho các prompt token mới được khởi tạo.
 - `--batch_size`: Kích thước batch size mỗi bước huấn luyện.
 - `--ssc_dist` / `--ssc_temp`: Cấu hình cho hàm tính khoảng cách và temperature của hàm `L_SSC`.
-- `--independent_ln`: Học riêng LayerNorm của 2 nhánh sketch visual và photo visual. Nếu không dùng tham số này thì học chung LayerNorm.
+- `--independent_ln`: Học riêng LayerNorm của 2 nhánh sketch visual và photo visual. Nếu không dùng tham số này thì học chung LayerNorm trong visual encoder.
