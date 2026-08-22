@@ -15,6 +15,7 @@ from torch.utils.data import DataLoader
 from experiments.options import parser
 from src.model import SGSPLModel
 from src.dataset_retrieval import TrainDataset, ValDataset
+from src.splits import UNSEEN_CLASSES
 from src.utils import CustomProgressBar
 
 
@@ -24,10 +25,19 @@ def main():
     pl.seed_everything(opts.seed, workers=True)
 
     train_ds = TrainDataset(opts)
-    val_sk_ds = ValDataset(opts, modality='sketch')
-    val_ph_ds = ValDataset(opts, modality='photo')
 
-    seen_class_names = train_ds.seen_classes
+    seen_classes   = train_ds.seen_classes
+    unseen_classes = UNSEEN_CLASSES[opts.dataset]
+
+    # Nhãn toàn cục dùng chung cho mọi val set (seen + unseen không đè id lên nhau).
+    all_classes = sorted(set(seen_classes) | set(unseen_classes))
+    class_to_id = {c: i for i, c in enumerate(all_classes)}
+
+    # ZS luôn cần: query = sketch unseen, gallery = photo unseen
+    val_sk_ds = ValDataset(opts, unseen_classes, class_to_id, modality='sketch')
+    val_ph_ds = ValDataset(opts, unseen_classes, class_to_id, modality='photo')
+
+    seen_class_names = seen_classes
 
     train_loader = DataLoader(
         dataset = train_ds,
@@ -49,20 +59,43 @@ def main():
         num_workers = opts.num_workers
     )
 
+    # Thứ tự loader = dataloader_idx trong model.validation_step:
+    #   0 = sketch unseen (query),  1 = photo unseen (gallery)
+    #   2 = sketch seen  (query),   3 = photo seen  (gallery)   ← chỉ khi bật 'gzs'
+    val_loaders = [val_sk_loader, val_ph_loader]
+
+    if 'gzs' in opts.eval:
+        seen_sk_ds = ValDataset(opts, seen_classes, class_to_id, modality='sketch')
+        seen_ph_ds = ValDataset(opts, seen_classes, class_to_id, modality='photo')
+
+        # Sketch seen rất nhiều → lấy mẫu để đo gap nhanh (deterministic theo seed).
+        if opts.gzs_seen_query_limit and len(seen_sk_ds) > opts.gzs_seen_query_limit:
+            g = torch.Generator().manual_seed(opts.seed)
+            keep = torch.randperm(len(seen_sk_ds), generator=g)[:opts.gzs_seen_query_limit].tolist()
+            seen_sk_ds = torch.utils.data.Subset(seen_sk_ds, keep)
+
+        val_loaders += [
+            DataLoader(seen_sk_ds, batch_size=opts.test_batch_size, shuffle=False, num_workers=opts.num_workers),
+            DataLoader(seen_ph_ds, batch_size=opts.test_batch_size, shuffle=False, num_workers=opts.num_workers),
+        ]
+
     model = SGSPLModel(opts, seen_class_names=seen_class_names)
 
     logger = TensorBoardLogger(save_dir=opts.log_dir)
 
+    # Metric theo dõi để checkpoint / early-stop: ưu tiên ZS, nếu chỉ bật GZS thì theo GZS.
+    monitor_metric = 'mAP' if 'zs' in opts.eval else 'GZS_mAP'
+
     checkpoint_cb = ModelCheckpoint(
         dirpath   = os.path.join(opts.ckpt_dir, opts.exp_name),
-        filename  = '{epoch:02d}-{mAP:.4f}',
-        monitor   = 'mAP',
+        filename  = '{epoch:02d}-{' + monitor_metric + ':.4f}',
+        monitor   = monitor_metric,
         mode      = 'max',
         save_top_k = 1,
         save_last = True,
     )
     early_stop_cb = EarlyStopping(
-        monitor='mAP',
+        monitor=monitor_metric,
         patience=5,
         mode='max',
         verbose=False,
@@ -91,7 +124,7 @@ def main():
     trainer.fit(
         model = model,
         train_dataloaders = train_loader,
-        val_dataloaders = [val_sk_loader, val_ph_loader],
+        val_dataloaders = val_loaders,
         ckpt_path = opts.ckpt_path
     )
 

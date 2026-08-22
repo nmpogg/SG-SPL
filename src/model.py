@@ -99,11 +99,14 @@ class SGSPLModel(pl.LightningModule):
         self.best_zs_map  = -1.0
         self.best_gzs_map = -1.0
 
-        # Collect ZS/GZS validation outputs across batches (Lightning 2.x)
-        self._val_sk_feats  = []
-        self._val_ph_feats  = []
-        self._val_sk_labels = []
-        self._val_ph_labels = []
+        # Gom feature validation qua các batch (Lightning 2.x).
+        # 4 nhóm theo dataloader_idx (xem train.py):
+        #   unseen: query = sketch, gallery = photo  → ZS-SBIR
+        #   seen  : chỉ dùng khi bật --eval gzs      → GZS + generalization gap
+        self._u_sk_f, self._u_sk_l = [], []   # unseen sketch (query)
+        self._u_ph_f, self._u_ph_l = [], []   # unseen photo  (gallery)
+        self._s_sk_f, self._s_sk_l = [], []   # seen sketch   (query)
+        self._s_ph_f, self._s_ph_l = [], []   # seen photo    (gallery)
 
     # Anchor matrix (deferred — needs device)
     def _ensure_anchor(self):
@@ -221,6 +224,23 @@ class SGSPLModel(pl.LightningModule):
             + loss_sph
         )
 
+        # Log từng loss để nhìn thấy cân bằng scale.
+        #  - loss/*   : giá trị GỐC của mỗi loss (chưa nhân trọng số)
+        #  - contrib/*: phần ĐÓNG GÓP thực tế vào tổng (đã nhân trọng số)
+        # So sánh contrib/* cho biết loss nào đang chi phối gradient.
+        self.log_dict({
+            'loss/triplet': loss_tri,
+            'loss/cls':     loss_cls,
+            'loss/ssc':     loss_ssc,
+            'loss/xmod':    loss_xmod,
+            'loss/sph':     loss_sph,
+            'contrib/triplet': self.opts.triplet_weight * loss_tri,
+            'contrib/cls':     self.opts.classification_weight * loss_cls,
+            'contrib/ssc':     self.opts.ssc_weight * loss_ssc,
+            'contrib/xmod':    self.opts.ssc_weight * self.opts.xmod_weight * loss_xmod,
+            'contrib/sph':     loss_sph,
+        }, on_step=False, on_epoch=True)
+
         self.log('train_loss', loss, on_step=False, on_epoch=True)
 
         return loss
@@ -232,55 +252,79 @@ class SGSPLModel(pl.LightningModule):
     def validation_step(self, batch, batch_idx, dataloader_idx=0):
         imgs, cat_idx = batch
 
+        # Thứ tự loader khớp với train.py:
+        #   0 = sketch unseen, 1 = photo unseen, 2 = sketch seen, 3 = photo seen
         if dataloader_idx == 0:
-            feats = self.forward(imgs, modality='sketch')
-            self._val_sk_feats.append(feats.cpu())
-            self._val_sk_labels.append(cat_idx.cpu())
+            f = self.forward(imgs, modality='sketch')
+            self._u_sk_f.append(f.cpu());  self._u_sk_l.append(cat_idx.cpu())
+        elif dataloader_idx == 1:
+            f = self.forward(imgs, modality='image')
+            self._u_ph_f.append(f.cpu());  self._u_ph_l.append(cat_idx.cpu())
+        elif dataloader_idx == 2:
+            f = self.forward(imgs, modality='sketch')
+            self._s_sk_f.append(f.cpu());  self._s_sk_l.append(cat_idx.cpu())
         else:
-            feats = self.forward(imgs, modality='image')
-            self._val_ph_feats.append(feats.cpu())
-            self._val_ph_labels.append(cat_idx.cpu())
+            f = self.forward(imgs, modality='image')
+            self._s_ph_f.append(f.cpu());  self._s_ph_l.append(cat_idx.cpu())
 
     def on_validation_epoch_end(self):
-        """Compute mAP and P@K from collected validation features."""
-        if not self._val_sk_feats:
+        """Tính mAP/P@K từ feature đã gom. ZS luôn tính; GZS + gap chỉ khi có seen."""
+        if not self._u_sk_f:
             return
 
-        sk_feats  = torch.cat(self._val_sk_feats)
-        ph_feats  = torch.cat(self._val_ph_feats)
-        sk_labels = torch.cat(self._val_sk_labels)
-        ph_labels = torch.cat(self._val_ph_labels)
-
         metric_cfg = get_metric_config(self.opts.dataset)
-
-        # ZS-SBIR
-        zs_metrics = compute_retrieval_metrics(
-            sk_feats  = sk_feats,
-            ph_feats  = ph_feats,
-            sk_labels = sk_labels,
-            ph_labels = ph_labels,
-            **metric_cfg,
-        )
-        map_k = metric_cfg['map_k']
+        map_k  = metric_cfg['map_k']
         prec_k = metric_cfg['prec_k']
-        zs_map = zs_metrics['mAP']
-        zs_prec = zs_metrics['precision']
 
+        sk_u  = torch.cat(self._u_sk_f);  skl_u = torch.cat(self._u_sk_l)
+        ph_u  = torch.cat(self._u_ph_f);  phl_u = torch.cat(self._u_ph_l)
+
+        # ── ZS-SBIR: query = sketch unseen, gallery = photo unseen ──────────────
+        zs = compute_retrieval_metrics(sk_u, ph_u, skl_u, phl_u, **metric_cfg)
+        zs_map, zs_prec = zs['mAP'], zs['precision']
         if zs_map > self.best_zs_map:
             self.best_zs_map = zs_map
-        
-        train_loss = self.trainer.callback_metrics.get('train_loss', torch.tensor(0.0)).item()
 
-        self.log('mAP', zs_map, prog_bar=False, on_epoch=True)     
-        self.log(f'precision', zs_prec, prog_bar=False, on_epoch=True)
-        print(f"\nmAP@{map_k if map_k is not None else 'all'}: {zs_map:.3f}, P@{prec_k}: {zs_prec:.3f}, Best mAP: {self.best_zs_map:.3f}")
+        self.log('mAP', zs_map, prog_bar=False, on_epoch=True)
+        self.log('precision', zs_prec, prog_bar=False, on_epoch=True)
+        print(f"\n[ZS ] mAP@{map_k if map_k is not None else 'all'}: {zs_map:.3f}, "
+              f"P@{prec_k}: {zs_prec:.3f}, Best: {self.best_zs_map:.3f}")
+
+        # ── GZS-SBIR + generalization gap (chỉ khi bật --eval gzs) ──────────────
+        if self._s_ph_f:
+            ph_all  = torch.cat([ph_u,  torch.cat(self._s_ph_f)])
+            phl_all = torch.cat([phl_u, torch.cat(self._s_ph_l)])
+
+            # GZS: query unseen, gallery = seen + unseen (seen là distractor).
+            gzs_u = compute_retrieval_metrics(sk_u, ph_all, skl_u, phl_all, **metric_cfg)
+            gzs_map = gzs_u['mAP']
+            if gzs_map > self.best_gzs_map:
+                self.best_gzs_map = gzs_map
+
+            self.log('GZS_mAP', gzs_map, prog_bar=False, on_epoch=True)
+            self.log('GZS_precision', gzs_u['precision'], prog_bar=False, on_epoch=True)
+
+            line = (f"[GZS] mAP@{map_k if map_k is not None else 'all'}: {gzs_map:.3f}, "
+                    f"P@{prec_k}: {gzs_u['precision']:.3f}, Best: {self.best_gzs_map:.3f}")
+
+            # Generalization gap: cùng gallery, so query seen vs query unseen.
+            if self._s_sk_f:
+                sk_s  = torch.cat(self._s_sk_f);  skl_s = torch.cat(self._s_sk_l)
+                gzs_s = compute_retrieval_metrics(sk_s, ph_all, skl_s, phl_all, **metric_cfg)
+                gap = gzs_s['mAP'] - gzs_map      # seen mAP − unseen mAP
+                self.log('GZS_seen_mAP', gzs_s['mAP'], prog_bar=False, on_epoch=True)
+                self.log('gen_gap', gap, prog_bar=False, on_epoch=True)
+                line += f" | seen mAP: {gzs_s['mAP']:.3f}, gap: {gap:.3f}"
+
+            print(line)
+
+        train_loss = self.trainer.callback_metrics.get('train_loss', torch.tensor(0.0)).item()
         print(f"Train loss (epoch avg): {train_loss:.6f}")
 
         # Clear buffers
-        self._val_sk_feats.clear()
-        self._val_ph_feats.clear()
-        self._val_sk_labels.clear()
-        self._val_ph_labels.clear()
+        for buf in (self._u_sk_f, self._u_sk_l, self._u_ph_f, self._u_ph_l,
+                    self._s_sk_f, self._s_sk_l, self._s_ph_f, self._s_ph_l):
+            buf.clear()
 
     # Optimiser — two param groups with different LRs
     def configure_optimizers(self):

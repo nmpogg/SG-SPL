@@ -61,34 +61,39 @@ class TrainDataset(Dataset):
 
 
 class ValDataset(Dataset):
-   
-    def __init__(self, opts, modality = 'photo'):
+    """
+    Nạp ảnh (photo hoặc sketch) của một tập class cho trước.
+
+    Args:
+        opts
+        classes:      danh sách tên class cần nạp (seen HOẶC unseen).
+        class_to_id:  dict {tên_class -> id toàn cục}. Dùng CHUNG cho mọi
+                      ValDataset để nhãn seen và unseen không đè lên nhau khi
+                      gộp gallery (cần cho GZS + generalization gap).
+        modality:     'photo' hoặc 'sketch'.
+    """
+
+    def __init__(self, opts, classes, class_to_id, modality='photo'):
         super().__init__()
         self.transform = normal_transform(opts.image_size)
         self.modality  = modality
         self.opts = opts
-        self.seed = 42
+        self.class_to_id = class_to_id
 
-        self.unseen_classes = UNSEEN_CLASSES[opts.dataset]
-
-        unseen_paths = []
-        for cls in self.unseen_classes:
-            if self.modality == 'photo':
-                unseen_paths.extend(glob.glob(os.path.join(self.opts.root, 'photo', cls, '*')))
-            else:
-                unseen_paths.extend(glob.glob(os.path.join(self.opts.root, 'sketch', cls, '*')))
-
-        self.paths = list(unseen_paths)
+        sub = 'photo' if modality == 'photo' else 'sketch'
+        self.paths = []
+        for cls in classes:
+            self.paths.extend(glob.glob(os.path.join(self.opts.root, sub, cls, '*')))
 
     def __len__(self):
         return len(self.paths)
 
     def __getitem__(self, index):
-        filepath = self.paths[index]                
+        filepath = self.paths[index]
         cls = filepath.split(os.path.sep)[-2]
-        
-        image = ImageOps.pad(Image.open(filepath).convert('RGB'),  size=(self.opts.image_size, self.opts.image_size))
+
+        image = ImageOps.pad(Image.open(filepath).convert('RGB'), size=(self.opts.image_size, self.opts.image_size))
         image_tensor = self.transform(image)
-        
-        return image_tensor, self.unseen_classes.index(cls)
+
+        return image_tensor, self.class_to_id[cls]
 

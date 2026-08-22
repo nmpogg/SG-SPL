@@ -25,6 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from torch.utils.data import DataLoader
 from src.model import SGSPLModel
 from src.dataset_retrieval import TrainDataset, ValDataset
+from src.splits import UNSEEN_CLASSES
 from src.eval import compute_retrieval_metrics, get_metric_config
 from experiments.options import parser as train_parser
 
@@ -50,8 +51,12 @@ def run_evaluation(opts):
     # train_ds provides seen_classes which is needed for the model
     train_ds = TrainDataset(opts)
 
-    val_sk_ds = ValDataset(opts, modality='sketch')
-    val_ph_ds = ValDataset(opts, modality='photo')
+    unseen_classes = UNSEEN_CLASSES[opts.dataset]
+    all_classes = sorted(set(train_ds.seen_classes) | set(unseen_classes))
+    class_to_id = {c: i for i, c in enumerate(all_classes)}
+
+    val_sk_ds = ValDataset(opts, unseen_classes, class_to_id, modality='sketch')
+    val_ph_ds = ValDataset(opts, unseen_classes, class_to_id, modality='photo')
 
     print(f"         Sketch queries : {len(val_sk_ds):,}")
     print(f"         Photo gallery  : {len(val_ph_ds):,}")
@@ -127,7 +132,7 @@ def run_evaluation(opts):
     print(f"  QUERIES    : {len(val_sk_ds):,} sketches")
     print(f"  GALLERY    : {len(val_ph_ds):,} photos")
     print(f"  ZS mAP@{'all' if map_k is None else map_k:<4}: {zs_metrics['mAP']:.4f}")
-    print(f"  ZS P@{prec_k}    : {zs_metrics[f'P@{prec_k}']:.4f}")
+    print(f"  ZS P@{prec_k}    : {zs_metrics['precision']:.4f}")
     print("=" * 55 + "\n")
 
 

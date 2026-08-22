@@ -91,6 +91,17 @@ parser.add_argument('--text_templates', type=str, nargs='+',
                     default=['a photo of a {}.'],
                     help='Templates for building text anchor matrix A')
 
+# Evaluation
+parser.add_argument('--eval', type=str, nargs='+', default=['zs'],
+                    choices=['zs', 'gzs'],
+                    help='Chọn (các) loại eval để bật. '
+                         '"zs"  = ZS-SBIR  (query = sketch unseen, gallery = photo unseen). '
+                         '"gzs" = GZS-SBIR (gallery = photo seen + unseen) kèm generalization gap. '
+                         'Có thể bật cả hai: --eval zs gzs. Mặc định: chỉ zs (nhanh nhất).')
+parser.add_argument('--gzs_seen_query_limit', type=int, default=3000,
+                    help='Số sketch seen tối đa dùng làm query khi đo generalization gap '
+                         '(lấy mẫu ngẫu nhiên theo seed để giữ eval nhanh; 0 = dùng hết).')
+
 # Trainer
 parser.add_argument('--gpus', type=int, default=1)
 parser.add_argument('--precision', type=str, default='16-mixed',
