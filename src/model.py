@@ -26,13 +26,6 @@ import clip
 from src.losses import build_text_anchor, PrototypeBank, classification_loss, structural_losses, asym_spherical_loss
 from src.eval import compute_retrieval_metrics, get_metric_config
 
-
-# def freeze_all_but_ln(module: nn.Module):
-#     for m in module.modules():
-#         if not isinstance(m, nn.LayerNorm):
-#             for p in m.parameters(recurse=False):
-#                 p.requires_grad_(False)
-
 # def freeze_all_but_ln(module):
 #     """Freeze an encoder, then enable only its LayerNorm parameters."""
 #     module.requires_grad_(False)
@@ -41,14 +34,6 @@ from src.eval import compute_retrieval_metrics, get_metric_config
 #             child.requires_grad_(True)
 
 def freeze_all_but_ln(module):
-    """
-    Reproduce the leaky freezing behavior.
-
-    LayerNorm parameters remain trainable. Parameters such as
-    positional_embedding, class_embedding, and visual.proj can also
-    remain trainable because they are not direct weight/bias attributes
-    of a child module.
-    """
     module.requires_grad_(True)
 
     for child in module.modules():
@@ -113,7 +98,7 @@ class SGSPLModel(pl.LightningModule):
         self.sk_prompt  = nn.Parameter(torch.randn(opts.n_prompts, visual_width))
         self.img_prompt = nn.Parameter(torch.randn(opts.n_prompts, visual_width))
 
-        print_trainable_parameters(self)
+        # print_trainable_parameters(self)
         # Triplet loss (CLIP-AT baseline)
         self.distance_fn = lambda x, y: 1.0 - F.cosine_similarity(x, y)
         self.loss_tri = nn.TripletMarginWithDistanceLoss(
@@ -167,16 +152,6 @@ class SGSPLModel(pl.LightningModule):
 
 
     def forward(self, images: torch.Tensor, modality: str) -> torch.Tensor:
-        """
-        Encode images using the modality-specific prompt.
-
-        Args:
-            images:   [B, 3, H, W]
-            modality: 'sketch' or 'image'
-
-        Returns:
-            features: [B, D] — L2-normalised embeddings
-        """
         prompt = self.sk_prompt if modality == 'sketch' else self.img_prompt
         if prompt.shape[0] == 0:
             prompt = None
@@ -188,13 +163,8 @@ class SGSPLModel(pl.LightningModule):
 
     @torch.no_grad()
     def _encode_frozen(self, images: torch.Tensor) -> torch.Tensor:
-        """
-        Encode with frozen (no-prompt) CLIP → used as anchor for L_asym_sph.
-        Returns L2-normalised fp32 features.
-        """
         feats = self.clip_frozen.encode_image(images, prompt=None)
         return F.normalize(feats.float(), dim=-1)
-
 
     def training_step(self, batch, batch_idx):
         self._ensure_anchor()
@@ -263,10 +233,6 @@ class SGSPLModel(pl.LightningModule):
 
         return loss
 
-    # ──────────────────────────────────────────────────────────────────────────
-    # Validation step — collect features
-    # ──────────────────────────────────────────────────────────────────────────
-
     def validation_step(self, batch, batch_idx, dataloader_idx=0):
         imgs, cat_idx = batch
 
@@ -280,7 +246,6 @@ class SGSPLModel(pl.LightningModule):
             self._val_ph_labels.append(cat_idx.cpu())
 
     def on_validation_epoch_end(self):
-        """Compute mAP and P@K from collected validation features."""
         if not self._val_sk_feats:
             return
 
@@ -314,7 +279,6 @@ class SGSPLModel(pl.LightningModule):
         print(f"\nmAP@{map_k if map_k is not None else 'all'}: {zs_map:.3f}, P@{prec_k}: {zs_prec:.3f}, Best mAP: {self.best_zs_map:.3f}")
         print(f"Train loss (epoch avg): {train_loss:.6f}")
 
-        # Clear buffers
         self._val_sk_feats.clear()
         self._val_ph_feats.clear()
         self._val_sk_labels.clear()
