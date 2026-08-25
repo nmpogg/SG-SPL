@@ -33,13 +33,31 @@ from src.eval import compute_retrieval_metrics, get_metric_config
 #             for p in m.parameters(recurse=False):
 #                 p.requires_grad_(False)
 
-def freeze_all_but_ln(module):
-    """Freeze an encoder, then enable only its LayerNorm parameters."""
-    module.requires_grad_(False)
-    for child in module.modules():
-        if isinstance(child, torch.nn.LayerNorm):
-            child.requires_grad_(True)
+# def freeze_all_but_ln(module):
+#     """Freeze an encoder, then enable only its LayerNorm parameters."""
+#     module.requires_grad_(False)
+#     for child in module.modules():
+#         if isinstance(child, torch.nn.LayerNorm):
+#             child.requires_grad_(True)
 
+def freeze_all_but_ln(module):
+    """
+    Reproduce the leaky freezing behavior.
+
+    LayerNorm parameters remain trainable. Parameters such as
+    positional_embedding, class_embedding, and visual.proj can also
+    remain trainable because they are not direct weight/bias attributes
+    of a child module.
+    """
+    module.requires_grad_(True)
+
+    for child in module.modules():
+        if not isinstance(child, torch.nn.LayerNorm):
+            if hasattr(child, "weight") and child.weight is not None:
+                child.weight.requires_grad_(False)
+
+            if hasattr(child, "bias") and child.bias is not None:
+                child.bias.requires_grad_(False)
 
 def print_trainable_parameters(model):
     """Print every parameter that will be updated by the optimizer."""
