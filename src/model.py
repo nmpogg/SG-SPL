@@ -40,6 +40,25 @@ def freeze_all_but_ln(module):
         if isinstance(child, torch.nn.LayerNorm):
             child.requires_grad_(True)
 
+
+def print_trainable_parameters(model):
+    """Print every parameter that will be updated by the optimizer."""
+    trainable = []
+    frozen = 0
+    for name, param in model.named_parameters():
+        if param.requires_grad:
+            trainable.append((name, tuple(param.shape), param.numel()))
+        else:
+            frozen += param.numel()
+
+    print('\nTrainable parameters:')
+    for name, shape, count in trainable:
+        print(f'  {name:60s} shape={str(shape):18s} numel={count:,}')
+    trainable_count = sum(count for _, _, count in trainable)
+    total_count = trainable_count + frozen
+    print(f'Trainable: {trainable_count:,} / {total_count:,} '
+          f'({100.0 * trainable_count / total_count:.2f}%)\n')
+
 class SGSPLModel(pl.LightningModule):
 
     def __init__(self, opts, seen_class_names: list):
@@ -76,6 +95,7 @@ class SGSPLModel(pl.LightningModule):
         self.sk_prompt  = nn.Parameter(torch.randn(opts.n_prompts, visual_width))
         self.img_prompt = nn.Parameter(torch.randn(opts.n_prompts, visual_width))
 
+        print_trainable_parameters(self)
         # Triplet loss (CLIP-AT baseline)
         self.distance_fn = lambda x, y: 1.0 - F.cosine_similarity(x, y)
         self.loss_tri = nn.TripletMarginWithDistanceLoss(
