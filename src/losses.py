@@ -266,7 +266,7 @@ def asym_spherical_loss(
     return l_sph_ph * l_ph + l_sph_sk * l_sk
 
 
-def nt_xent_loss(sk_feat: torch.Tensor, ph_feat: torch.Tensor) -> torch.Tensor:
+def nt_xent(sk_feat: torch.Tensor, ph_feat: torch.Tensor) -> torch.Tensor:
 
     sk = F.normalize(sk_feat, dim=-1)
     ph = F.normalize(ph_feat, dim=-1)
