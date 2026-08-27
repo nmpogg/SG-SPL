@@ -23,7 +23,7 @@ import torch.nn.functional as F
 import pytorch_lightning as pl
 
 import clip
-from src.losses import build_text_anchor, PrototypeBank, classification_loss, structural_losses, asym_spherical_loss
+from src.losses import build_text_anchor, PrototypeBank, classification_loss, structural_losses, asym_spherical_loss, nt_xent
 from src.eval import compute_retrieval_metrics, get_metric_config
 
 # def freeze_all_but_ln(module):
@@ -221,12 +221,15 @@ class SGSPLModel(pl.LightningModule):
             l_sph_sk  = self.opts.sph_sk_weight,
         )
 
+        nt_xent_loss = nt_xent(sk_feat, ph_feat)
+
         # Total loss
         loss = (
             self.opts.triplet_weight * loss_tri
             + self.opts.classification_weight * loss_cls
             + self.opts.ssc_weight * (loss_ssc + self.opts.xmod_weight * loss_xmod)
             + loss_sph
+            + self.opts.nt_xent_weight * nt_xent_loss
         )
 
         self.log('train_loss', loss, on_step=False, on_epoch=True)

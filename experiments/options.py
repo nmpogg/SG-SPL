@@ -76,6 +76,8 @@ parser.add_argument('--sph_ph_weight', type=float, default=1.0,
 parser.add_argument('--sph_sk_weight', type=float, default=0.2,
                     help='lambda_sk: anchor weight for sketch modality (weaker → let sketch adapt)')
 
+# L_NT-Xent — Normalized Temperature-scaled Cross Entropy
+parser.add_argument('--nt_xent_weight', type=float, default=0.5, help='Weight for L_NT-Xent (set 0 to disable)')
 
 # EMA prototype bank
 parser.add_argument('--ema_m', type=float, default=0.9, 
