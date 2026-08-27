@@ -266,30 +266,17 @@ def asym_spherical_loss(
     return l_sph_ph * l_ph + l_sph_sk * l_sk
 
 
-def nt_xent(features_view1: torch.Tensor, features_view2: torch.Tensor):
-    """
-    NT-Xent for SimCLR
-    features_view1, features_view2: (B, D)
-    """
-    features_view1 = F.normalize(features_view1)
-    features_view2 = F.normalize(features_view2)
-    
+def nt_xent_loss(sk_feat: torch.Tensor, ph_feat: torch.Tensor) -> torch.Tensor:
+
+    sk = F.normalize(sk_feat, dim=-1)
+    ph = F.normalize(ph_feat, dim=-1)
     temperature = 0.07
-    B, D = features_view1.shape
-    device = features_view1.device
+    logits_sk_ph = sk @ ph.t() / temperature
+    logits_ph_sk = ph @ sk.t() / temperature
 
-    z = torch.cat([features_view1, features_view2], dim=0)
+    targets = torch.arange(sk.size(0), device=sk.device)
 
-    logits = z @ z.t()                              # (2B, 2B)
-    mask = torch.eye(2 * B, dtype=torch.bool, device=device)
-    logits = logits.masked_fill(mask, float('-inf'))
+    loss_sk_ph = F.cross_entropy(logits_sk_ph, targets)
+    loss_ph_sk = F.cross_entropy(logits_ph_sk, targets)
 
-    logits = logits / temperature
-
-    labels = torch.cat([
-        torch.arange(B, 2*B, device=device),
-        torch.arange(0, B, device=device)
-    ], dim=0).long()
-
-    loss = F.cross_entropy(logits, labels)
-    return loss
+    return loss_sk_ph + loss_ph_sk
