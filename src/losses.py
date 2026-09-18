@@ -264,3 +264,32 @@ def asym_spherical_loss(
     l_sk = (1.0 - F.cosine_similarity(sk_feat_n, sk_anchor_n)).mean()
 
     return l_sph_ph * l_ph + l_sph_sk * l_sk
+
+
+def nt_xent(features_view1: torch.Tensor, features_view2: torch.Tensor):
+    """
+    NT-Xent for SimCLR
+    features_view1, features_view2: (B, D)
+    """
+    features_view1 = F.normalize(features_view1)
+    features_view2 = F.normalize(features_view2)
+    
+    temperature = 0.07
+    B, D = features_view1.shape
+    device = features_view1.device
+
+    z = torch.cat([features_view1, features_view2], dim=0)
+
+    logits = z @ z.t()                              # (2B, 2B)
+    mask = torch.eye(2 * B, dtype=torch.bool, device=device)
+    logits = logits.masked_fill(mask, float('-inf'))
+
+    logits = logits / temperature
+
+    labels = torch.cat([
+        torch.arange(B, 2*B, device=device),
+        torch.arange(0, B, device=device)
+    ], dim=0).long()
+
+    loss = F.cross_entropy(logits, labels)
+    return loss
