@@ -6,6 +6,8 @@ Use the same model options that were used for training, for example:
         --ckpt_path checkpoints/SG-SPL/last.ckpt \
         --dataset sketchy_2 \
         --root datasets/Sketchy/
+        --n_prompt 1 \
+        --independent_ln
 """
 
 import os
