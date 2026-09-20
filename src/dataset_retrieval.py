@@ -6,7 +6,7 @@ from PIL import Image, ImageOps
 from torch.utils.data import Dataset
 from torchvision import transforms
 
-from src.splits import UNSEEN_CLASSES
+from src.splits import UNSEEN_CLASSES, GENERALIZED_CLASSES
 
 def normal_transform(image_size: int = 224):
     dataset_transforms = transforms.Compose([
@@ -70,7 +70,14 @@ class ValDataset(Dataset):
         self.opts = opts
         self.seed = 42
 
-        self.unseen_classes = UNSEEN_CLASSES[opts.dataset]
+        self.unseen_classes = UNSEEN_CLASSES[self.opts.dataset]
+
+        if self.opts.split == 'gzs':
+            self.generalized_classes = GENERALIZED_CLASSES[self.opts.dataset]
+        else:
+            self.generalized_classes = []
+
+        self.val_classes = self.unseen_classes + self.generalized_classes
 
         unseen_paths = []
         for cls in self.unseen_classes:
@@ -81,6 +88,11 @@ class ValDataset(Dataset):
 
         self.paths = list(unseen_paths)
 
+        if self.modality == 'photo':
+            if self.opts.split == 'gzs':
+                for cls in self.generalized_classes:
+                    self.paths.extend(glob.glob(os.path.join(self.opts.root, 'photo', cls, '*')))
+
     def __len__(self):
         return len(self.paths)
 
@@ -90,6 +102,6 @@ class ValDataset(Dataset):
         
         image = ImageOps.pad(Image.open(filepath).convert('RGB'),  size=(self.opts.image_size, self.opts.image_size))
         image_tensor = self.transform(image)
-        
-        return image_tensor, self.unseen_classes.index(cls)
+
+        return image_tensor, self.val_classes.index(cls)
 
