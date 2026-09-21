@@ -16,6 +16,7 @@ Lệnh sau chạy CLIP-AT kiểu prompt tuning với chỉ `L_triplet` + `L_cls`
   --xmod_weight 0 \
   --sph_ph_weight 0 \
   --sph_sk_weight 0 \
+  --cm_supcon_weight 0 \
   --lr_ln 1e-3 \
   --lr_prompt 1e-3 \
   --batch_size 64 \
@@ -37,6 +38,8 @@ Lệnh sau chạy CLIP-AT kiểu prompt tuning với chỉ `L_triplet` + `L_cls`
 - `--ssc_weight`: Trọng số của hàm mất mát Semantic Structure Consistency (`L_SSC`). Đặt bằng `0` để tắt ở mô hình baseline.
 - `--xmod_weight`: Trọng số của hàm mất mát Cross-modal Structure Consistency (`L_xmod`). Đặt bằng `0` để tắt.
 - `--sph_ph_weight` / `--sph_sk_weight`: Trọng số Asymmetric Hyperspherical Anchoring của nhánh photo và sketch. Đặt bằng `0` để tắt.
+- `--cm_supcon_weight`: Trọng số Cross-Modal Supervised Contrastive Loss. Đặt bằng `0` để tắt.
+- `--cm_supcon_temp`: Temperature của Cross-Modal Supervised Contrastive Loss.
 - `--lr_ln`: Learning rate áp dụng cho các lớp LayerNorm của CLIP.
 - `--lr_prompt`: Learning rate áp dụng riêng cho các prompt token mới được khởi tạo.
 - `--batch_size`: Kích thước batch size mỗi bước huấn luyện.

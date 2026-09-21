@@ -293,3 +293,52 @@ def nt_xent(features_view1: torch.Tensor, features_view2: torch.Tensor):
 
     loss = F.cross_entropy(logits, labels)
     return loss
+
+
+def cross_modal_supcon_loss(
+    sk_feat: torch.Tensor,
+    ph_feat: torch.Tensor,
+    cat_idx: torch.Tensor,
+    temperature: float = 0.07,
+) -> torch.Tensor:
+    """
+    Class-aware cross-modal supervised contrastive loss.
+
+    For each sketch, every photo of the same class in the batch is a
+    positive, and vice versa. Unlike instance-level NT-Xent, same-class
+    samples are therefore never treated as negatives.
+
+    L_CM-SupCon = 0.5 * (L_sk->ph + L_ph->sk)
+
+    Args:
+        sk_feat:     [B, D] sketch features.
+        ph_feat:     [B, D] photo features.
+        cat_idx:     [B] class indices shared by the paired batches.
+        temperature: Contrastive temperature tau.
+    """
+    if temperature <= 0:
+        raise ValueError('temperature must be greater than 0')
+    if sk_feat.ndim != 2 or ph_feat.ndim != 2:
+        raise ValueError('sk_feat and ph_feat must be 2D tensors [B, D]')
+    if sk_feat.shape != ph_feat.shape:
+        raise ValueError('sk_feat and ph_feat must have the same shape')
+    if cat_idx.ndim != 1 or cat_idx.shape[0] != sk_feat.shape[0]:
+        raise ValueError('cat_idx must have shape [B]')
+
+    sk_n = F.normalize(sk_feat, dim=-1)
+    ph_n = F.normalize(ph_feat, dim=-1)
+
+    logits = sk_n @ ph_n.t() / temperature                 # [B, B]
+    positive_mask = cat_idx[:, None].eq(cat_idx[None, :])  # [B, B]
+
+    def directional_loss(scores, positives):
+        log_prob = F.log_softmax(scores, dim=-1)
+        positives = positives.to(dtype=log_prob.dtype)
+        n_positives = positives.sum(dim=-1).clamp_min(1.0)
+        mean_log_prob_pos = (positives * log_prob).sum(dim=-1) / n_positives
+        return -mean_log_prob_pos.mean()
+
+    loss_sk_to_ph = directional_loss(logits, positive_mask)
+    loss_ph_to_sk = directional_loss(logits.t(), positive_mask.t())
+
+    return 0.5 * (loss_sk_to_ph + loss_ph_to_sk)

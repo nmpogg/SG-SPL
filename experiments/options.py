@@ -79,6 +79,12 @@ parser.add_argument('--sph_sk_weight', type=float, default=0.2,
 # L_NT-Xent — Normalized Temperature-scaled Cross Entropy
 parser.add_argument('--nt_xent_weight', type=float, default=0.5, help='Weight for L_NT-Xent (set 0 to disable)')
 
+# L_CM-SupCon - class-aware cross-modal supervised contrastive loss
+parser.add_argument('--cm_supcon_weight', type=float, default=0.5,
+                    help='Weight for L_CM-SupCon (set 0 to disable)')
+parser.add_argument('--cm_supcon_temp', type=float, default=0.07,
+                    help='Temperature for L_CM-SupCon')
+
 # EMA prototype bank
 parser.add_argument('--ema_m', type=float, default=0.9, 
                     help='EMA momentum for prototype bank update')

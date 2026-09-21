@@ -23,7 +23,10 @@ import torch.nn.functional as F
 import pytorch_lightning as pl
 
 import clip
-from src.losses import build_text_anchor, PrototypeBank, classification_loss, structural_losses, asym_spherical_loss, nt_xent
+from src.losses import (
+    build_text_anchor, PrototypeBank, classification_loss, structural_losses,
+    asym_spherical_loss, nt_xent, cross_modal_supcon_loss,
+)
 from src.eval import compute_retrieval_metrics, get_metric_config
 
 # def freeze_all_but_ln(module):
@@ -221,6 +224,12 @@ class SGSPLModel(pl.LightningModule):
         )
 
         nt_xent_loss = nt_xent(sk_feat, ph_feat)
+        cm_supcon_loss = cross_modal_supcon_loss(
+            sk_feat     = sk_feat,
+            ph_feat     = ph_feat,
+            cat_idx     = cat_idx,
+            temperature = self.opts.cm_supcon_temp,
+        )
 
         # Total loss
         loss = (
@@ -229,6 +238,7 @@ class SGSPLModel(pl.LightningModule):
             + self.opts.ssc_weight * (loss_ssc + self.opts.xmod_weight * loss_xmod)
             + loss_sph
             + self.opts.nt_xent_weight * nt_xent_loss
+            + self.opts.cm_supcon_weight * cm_supcon_loss
         )
 
         self.log('train_loss', loss, on_step=False, on_epoch=True)
