@@ -55,7 +55,7 @@ def main():
 
     checkpoint_cb = ModelCheckpoint(
         dirpath   = os.path.join(opts.ckpt_dir, opts.exp_name),
-        filename  = '{epoch:02d}-{mAP:.4f}',
+        filename  = 'best',
         monitor   = 'mAP',
         mode      = 'max',
         save_top_k = 1,
