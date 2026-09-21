@@ -119,8 +119,7 @@ class SGSPLModel(pl.LightningModule):
         self.register_buffer('text_emb_seen',  None, persistent=False)
         self._anchor_built = False
 
-        self.best_zs_map  = -1.0
-        self.best_gzs_map = -1.0
+        self.best_map  = -1.0
 
         # Collect ZS/GZS validation outputs across batches (Lightning 2.x)
         self._val_sk_feats  = []
@@ -259,8 +258,8 @@ class SGSPLModel(pl.LightningModule):
 
         metric_cfg = get_metric_config(self.opts.dataset)
 
-        # ZS-SBIR
-        zs_metrics = compute_retrieval_metrics(
+        # ZS/GZS-SBIR
+        metrics = compute_retrieval_metrics(
             sk_feats  = sk_feats,
             ph_feats  = ph_feats,
             sk_labels = sk_labels,
@@ -269,17 +268,17 @@ class SGSPLModel(pl.LightningModule):
         )
         map_k = metric_cfg['map_k']
         prec_k = metric_cfg['prec_k']
-        zs_map = zs_metrics['mAP']
-        zs_prec = zs_metrics['precision']
+        map_score = metrics['mAP']
+        prec_score = metrics['precision']
 
-        if zs_map > self.best_zs_map:
-            self.best_zs_map = zs_map
+        if not self.trainer.sanity_checking and map_score > self.best_map:
+            self.best_map = map_score
         
         train_loss = self.trainer.callback_metrics.get('train_loss', torch.tensor(0.0)).item()
 
-        self.log('mAP', zs_map, prog_bar=False, on_epoch=True)     
-        self.log(f'precision', zs_prec, prog_bar=False, on_epoch=True)
-        print(f"\nmAP@{map_k if map_k is not None else 'all'}: {zs_map:.3f}, P@{prec_k}: {zs_prec:.3f}, Best mAP: {self.best_zs_map:.3f}")
+        self.log('mAP', map_score, prog_bar=False, on_epoch=True)     
+        self.log(f'precision', prec_score, prog_bar=False, on_epoch=True)
+        print(f"\nmAP@{map_k if map_k is not None else 'all'}: {map_score:.3f}, P@{prec_k}: {prec_score:.3f}, Best mAP: {self.best_map:.3f}")
         print(f"Train loss (epoch avg): {train_loss:.6f}")
 
         self._val_sk_feats.clear()

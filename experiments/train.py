@@ -55,7 +55,7 @@ def main():
 
     checkpoint_cb = ModelCheckpoint(
         dirpath   = os.path.join(opts.ckpt_dir, opts.exp_name),
-        filename  = '{epoch:02d}-{mAP:.4f}',
+        filename  = 'best',
         monitor   = 'mAP',
         mode      = 'max',
         save_top_k = 1,
@@ -95,7 +95,7 @@ def main():
         ckpt_path = opts.ckpt_path
     )
 
-    print(f'\n✓ Training done. Best ZS-mAP: {model.best_zs_map:.3f}')
+    print(f'\n✓ Training done. Best mAP: {model.best_map:.3f}')
     print(f'  Best checkpoint: {checkpoint_cb.best_model_path}')
 
 if __name__ == '__main__':

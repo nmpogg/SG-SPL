@@ -5,12 +5,11 @@ class CustomProgressBar(TQDMProgressBar):
 
     def init_train_tqdm(self):
         bar = super().init_train_tqdm()
-        bar.leave = True
+        bar.leave = False
         return bar
 
     def init_validation_tqdm(self):
         return tqdm(
-            desc="Eval",
             position=self.process_position,
             disable=self.is_disabled,
             leave=False,

@@ -185,7 +185,7 @@ UNSEEN_CLASSES = {
 }
 
 GENERALIZED_CLASSES = {
-    "sketchy_2": {
+    "sketchy_2": [
         "teapot",
         "harp",
         "piano",
@@ -195,16 +195,16 @@ GENERALIZED_CLASSES = {
         "mushroom",
         "pretzel",
         "bell"
-    },
+    ],
     
-    "tuberlin": {
+    "tuberlin": [
         "airplane",
         "blimp",
         "tablelamp",
         "telephone",
         "human-skeleton",
         "pickup truck"
-    }
+    ]
 }
 
 VISUALIZE_CLASSES = {
