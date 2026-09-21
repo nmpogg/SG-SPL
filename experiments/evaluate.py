@@ -6,6 +6,7 @@ Use the same model options that were used for training, for example:
         --ckpt_path checkpoints/SG-SPL/last.ckpt \
         --dataset sketchy_2 \
         --root datasets/Sketchy/
+        --split zs \
         --n_prompt 1 \
         --independent_ln
 """
@@ -85,7 +86,7 @@ def main():
             f"precision: {metrics['precision']:.3f}"
         )
     else:
-        print('\nEvaluation done!')
+        print('\nEvaluation fail!')
 
 
 if __name__ == '__main__':

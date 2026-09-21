@@ -95,7 +95,7 @@ def main():
         ckpt_path = opts.ckpt_path
     )
 
-    print(f'\n✓ Training done. Best ZS-mAP: {model.best_zs_map:.3f}')
+    print(f'\n✓ Training done. Best mAP: {model.best_map:.3f}')
     print(f'  Best checkpoint: {checkpoint_cb.best_model_path}')
 
 if __name__ == '__main__':
