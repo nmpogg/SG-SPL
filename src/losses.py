@@ -3,9 +3,7 @@ SG-SPL Loss Functions
 =====================
 Ba thành phần regularizer giữ cấu trúc CLIP trong khi prompt tuning:
 
-  L = L_triplet + λ_cls·L_cls
-    + λ_ssc·(L_SSC + λ_x·L_xmod)
-    + λ_sph_ph·L_ph + λ_sph_sk·L_sk
+  L = L_base + λ_ssc·L_SSC + λ_xmod·L_xmod
 
 L_SSC     — Dual-modality Semantic Structure Consistency   (EBSeg → retrieval)
 L_xmod    — Cross-modal Structure Consistency              (novel contribution)
@@ -173,7 +171,7 @@ def classification_loss(
     logits_sk  = logit_scale * sk_n  @ text_n.t()   # [B, C_s]
     logits_ph  = logit_scale * ph_n  @ text_n.t()   # [B, C_s]
 
-    loss = (
+    loss = 0.5 * (
         F.cross_entropy(logits_sk,  cat_idx) +
         F.cross_entropy(logits_ph, cat_idx)
     )
@@ -187,19 +185,25 @@ def structural_losses(
     cat_idx:  torch.Tensor,         # [B]
     bank:     PrototypeBank,
     anchor_A: torch.Tensor,         # [C_s, C_s]
-    dist:     str   = 'mse',        # 'mse' | 'kl'
+    dist:     str   = 'mse',        # 'mse' | 'kl' | 'sym_kl' | 'js'
     T:        float = 0.1,
     warmup:   int   = 10,
     no_proto_grad: bool = False,
+    exclude_diagonal: bool = True,
 ) -> tuple:
     """
     Compute L_SSC and L_xmod using the prototype bank.
 
     L_SSC  = D(S_sk, A) + D(S_ph, A)      -- each modality vs text anchor
-    L_xmod = D(S_sk, stopgrad(S_ph))
-           + D(S_ph, stopgrad(S_sk))       -- cross-modal alignment
+    L_xmod = 0.5 * [D(S_sk, stopgrad(S_ph))
+                  + D(S_ph, stopgrad(S_sk))] -- cross-modal alignment
 
-    D = MSE (original EBSeg) or symmetric KL divergence (ablation option).
+    D compares row-wise inter-class relations. By default, self-similarity
+    entries S[i, i] are excluded because they are always one for normalised
+    prototypes and otherwise dominate low-temperature softmax distributions.
+
+    Supported distances: MSE, directional KL, symmetric KL, and
+    Jensen-Shannon divergence.
 
     Returns: (loss_ssc, loss_xmod)
     """
@@ -214,21 +218,77 @@ def structural_losses(
     Ssk = Psk[idx] @ Psk[idx].t()      # [K, K]
     Sph = Pph[idx] @ Pph[idx].t()      # [K, K]
 
-    if dist == 'mse':
-        loss_ssc  = F.mse_loss(Ssk, A) + F.mse_loss(Sph, A)
-        loss_xmod = (F.mse_loss(Ssk, Sph.detach()) +
-                     F.mse_loss(Sph, Ssk.detach()))
-    else:   # KL divergence
-        def kl(P, Q):
-            return F.kl_div(
-                F.log_softmax(P / T, dim=-1),
-                F.softmax(Q / T, dim=-1).detach(),
-                reduction='batchmean'
-            )
-        loss_ssc  = kl(Ssk, A) + kl(Sph, A)
-        loss_xmod = 0.5 * (kl(Ssk, Sph.detach()) + kl(Sph, Ssk.detach()))
+    Ssk = _relation_rows(Ssk, exclude_diagonal)
+    Sph = _relation_rows(Sph, exclude_diagonal)
+    A = _relation_rows(A, exclude_diagonal)
+
+    distance = _structural_distance(dist, T)
+    loss_ssc = distance(Ssk, A) + distance(Sph, A)
+    # Each direction updates one modality while treating the other as a
+    # stable target. This keeps the two encoders from chasing one another in
+    # the same backward path.
+    loss_xmod = 0.5 * (
+        distance(Ssk, Sph.detach()) +
+        distance(Sph, Ssk.detach())
+    )
 
     return loss_ssc, loss_xmod
+
+
+def _relation_rows(matrix: torch.Tensor, exclude_diagonal: bool) -> torch.Tensor:
+    """Return relation logits row-wise, optionally removing self-relations."""
+    if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1]:
+        raise ValueError('structural relation matrix must be square')
+    if not exclude_diagonal:
+        return matrix
+
+    n_classes = matrix.shape[0]
+    if n_classes < 2:
+        raise ValueError('at least two active classes are required')
+    off_diagonal = ~torch.eye(
+        n_classes, dtype=torch.bool, device=matrix.device
+    )
+    return matrix[off_diagonal].reshape(n_classes, n_classes - 1)
+
+
+def _structural_distance(name: str, temperature: float):
+    """Build a row-wise distance used by SSC and cross-modal alignment."""
+    if name not in {'mse', 'kl', 'sym_kl', 'js'}:
+        raise ValueError(f'unsupported structural distance: {name}')
+    if name != 'mse' and temperature <= 0:
+        raise ValueError('ssc_temp must be greater than 0')
+
+    if name == 'mse':
+        return F.mse_loss
+
+    def distributions(P, Q):
+        log_p = F.log_softmax(P / temperature, dim=-1)
+        log_q = F.log_softmax(Q / temperature, dim=-1).detach()
+        return log_p, log_q, log_p.exp(), log_q.exp()
+
+    if name == 'kl':
+        def directional_kl(P, Q):
+            log_p, _, _, q = distributions(P, Q)
+            return F.kl_div(log_p, q, reduction='batchmean')
+        return directional_kl
+
+    if name == 'sym_kl':
+        def symmetric_kl(P, Q):
+            log_p, log_q, p, q = distributions(P, Q)
+            kl_pq = (p * (log_p - log_q)).sum(dim=-1).mean()
+            kl_qp = (q * (log_q - log_p)).sum(dim=-1).mean()
+            return 0.5 * (kl_pq + kl_qp)
+        return symmetric_kl
+
+    def jensen_shannon(P, Q):
+        log_p, log_q, p, q = distributions(P, Q)
+        m = 0.5 * (p + q)
+        log_m = m.clamp_min(torch.finfo(m.dtype).tiny).log()
+        kl_pm = (p * (log_p - log_m)).sum(dim=-1).mean()
+        kl_qm = (q * (log_q - log_m)).sum(dim=-1).mean()
+        return 0.5 * (kl_pm + kl_qm)
+
+    return jensen_shannon
 
 
 

@@ -68,7 +68,7 @@ def run():
     bank.update(ph_feats.detach(), cat_idx, 'ph')
     print(f'   active prototypes: {bank.proto_mask.sum().item()} / {n_seen}')
 
-    Psk, Pph, idx = bank.get_prototypes_with_grad(sk_feats, ph_feats, cat_idx)
+    Psk, Pph, idx = bank.get_prototypes(sk_feats, ph_feats, cat_idx)
     print(f'   prototype matrix shape: {Psk.shape}, active idx: {idx.tolist()}')
     print()
 
@@ -92,7 +92,9 @@ def run():
     ph_f.retain_grad()
     cidx = torch.randint(0, n_seen, (B,), device=device)
 
-    loss_cls = classification_loss(sk_f, ph_f, cidx, text_emb)
+    loss_cls = classification_loss(
+        sk_f, ph_f, cidx, text_emb, clip_model.logit_scale.exp()
+    )
     print(f'   L_cls = {loss_cls.item():.4f}  (should not be NaN)')
 
     # L_SSC + L_xmod

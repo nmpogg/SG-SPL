@@ -26,7 +26,7 @@ parser.add_argument('--root', type=str, default='datasets/Sketchy/',
 #                     help='Root of QuickDraw-Extended: must contain sketches/ and images/')
 
 # DataLoader
-parser.add_argument('--batch_size', type=int, default=64)
+parser.add_argument('--batch_size', type=int, default=32)
 parser.add_argument('--test_batch_size', type=int, default=256)
 parser.add_argument('--num_workers',type=int, default=4)
 parser.add_argument('--image_size', type=int, default=224)
@@ -38,7 +38,7 @@ parser.add_argument('--embed_dim',  type=int, default=512,
                     help='CLIP embedding dimension (512 for ViT-B/32, 768 for ViT-L/14)')
 
 # Prompt Tuning  (CLIP-AT style)
-parser.add_argument('--n_prompts', type=int, default=3,
+parser.add_argument('--n_prompts', type=int, default=1,
                     help='Number of learnable prompt tokens per modality')
 parser.add_argument('--prompt_dim', type=int, default=768,
                     help='Prompt token dimension = CLIP visual transformer WIDTH '
@@ -54,26 +54,31 @@ parser.add_argument('--independent_ln', action='store_true', help='Use branch-sp
 
 
 # Loss weights
-# Triplet loss (always on)
+# Triplet loss (optional ablation; NT-Xent is the default base objective)
 parser.add_argument('--triplet_margin', type=float, default=0.3)
-parser.add_argument('--triplet_weight', type=float, default=1, help="Weight for triplet loss L_tri")
+parser.add_argument('--triplet_weight', type=float, default=0, help="Weight for triplet loss L_tri")
 
 # L_cls — classification loss
-parser.add_argument('--classification_weight', type=float, default=0.5, help='Weight for classification loss L_cls')
+parser.add_argument('--classification_weight', type=float, default=1.0,
+                    help='Weight for averaged sketch/photo classification loss L_cls')
 
 # L_SSC — Semantic Structure Consistency
-parser.add_argument('--ssc_weight', type=float, default=1.0, help='Weight for L_SSC (set 0 to disable)')
-parser.add_argument('--ssc_dist', type=str, default='mse', choices=['mse', 'kl'],
-                    help='Distance function for L_SSC: mse (EBSeg original) or kl')
-parser.add_argument('--ssc_temp', type=float, default=0.1, help='Temperature T for KL variant of L_SSC')
+parser.add_argument('--ssc_weight', type=float, default=0.0, help='Independent weight for L_SSC (set 0 to disable)')
+parser.add_argument('--ssc_dist', type=str, default='kl', choices=['mse', 'kl', 'sym_kl', 'js'],
+                    help='Row-wise structural distance; self-relations are excluded by default')
+parser.add_argument('--ssc_temp', type=float, default=0.1,
+                    help='Temperature for KL, symmetric-KL, and JS structural distances')
+parser.add_argument('--include_structural_diagonal', action='store_true',
+                    help='Include self-similarity entries in structural losses (legacy ablation)')
 
 # L_xmod — Cross-modal Structure Consistency
-parser.add_argument('--xmod_weight', type=float, default=0.5, help='Weight for L_xmod inside L_SSC term (set 0 to ablate xmod)')
+parser.add_argument('--xmod_weight', type=float, default=0.0,
+                    help='Independent weight for L_xmod (set 0 to disable)')
 
 # L_asym_sph — Asymmetric Hyperspherical Anchoring
-parser.add_argument('--sph_ph_weight', type=float, default=1.0,
+parser.add_argument('--sph_ph_weight', type=float, default=0.0,
                     help='lambda_ph: anchor weight for photo modality (stronger)')
-parser.add_argument('--sph_sk_weight', type=float, default=0.2,
+parser.add_argument('--sph_sk_weight', type=float, default=0.0,
                     help='lambda_sk: anchor weight for sketch modality (weaker → let sketch adapt)')
 
 # L_NT-Xent — Normalized Temperature-scaled Cross Entropy

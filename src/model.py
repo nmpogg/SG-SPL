@@ -10,10 +10,7 @@ Architecture:
   - EMA prototype bank for L_SSC and L_xmod
 
 Total loss:
-  L = L_triplet
-    + λ_cls  · L_cls
-    + λ_ssc  · (L_SSC + λ_x · L_xmod)
-    + L_asym_sph  (λ_ph and λ_sk are inside asym_spherical_loss)
+  L = L_base + λ_ssc · L_SSC + λ_xmod · L_xmod
 """
 
 import copy
@@ -174,10 +171,11 @@ class SGSPLModel(pl.LightningModule):
         # Encode with prompted CLIP
         sk_feat  = self.forward(sk,  modality='sketch')    # [B, D]
         ph_feat  = self.forward(img, modality='image')     # [B, D]
-        neg_feat = self.forward(neg, modality='image')     # [B, D]
-
-        # Triplet loss (CLIP-AT baseline)
-        loss_tri = self.loss_tri(sk_feat, ph_feat, neg_feat)
+        if self.opts.triplet_weight > 0:
+            neg_feat = self.forward(neg, modality='image')  # [B, D]
+            loss_tri = self.loss_tri(sk_feat, ph_feat, neg_feat)
+        else:
+            loss_tri = sk_feat.new_zeros(())
 
         # L_cls — classification loss
         logit_scale = self.clip_sk.logit_scale.exp()
@@ -189,36 +187,42 @@ class SGSPLModel(pl.LightningModule):
             logit_scale   = logit_scale,
         )
 
-        #  Update EMA prototype bank (no grad)
-        self.bank.update(sk_feat.detach(),  cat_idx, modality='sk')
-        self.bank.update(ph_feat.detach(), cat_idx, modality='ph')
+        if self.opts.ssc_weight > 0 or self.opts.xmod_weight > 0:
+            # Update EMA statistics only when a structural objective is active.
+            self.bank.update(sk_feat.detach(), cat_idx, modality='sk')
+            self.bank.update(ph_feat.detach(), cat_idx, modality='ph')
+            loss_ssc, loss_xmod = structural_losses(
+                sk_feat  = sk_feat,
+                ph_feat  = ph_feat,
+                cat_idx  = cat_idx,
+                bank     = self.bank,
+                anchor_A = self.anchor_A,
+                dist     = self.opts.ssc_dist,
+                T        = self.opts.ssc_temp,
+                warmup   = self.opts.bank_warmup,
+                no_proto_grad = self.opts.no_proto_grad,
+                exclude_diagonal = not getattr(
+                    self.opts, 'include_structural_diagonal', False
+                ),
+            )
+        else:
+            loss_ssc = sk_feat.new_zeros(())
+            loss_xmod = sk_feat.new_zeros(())
 
-        # L_SSC + L_xmod
-        loss_ssc, loss_xmod = structural_losses(
-            sk_feat  = sk_feat,
-            ph_feat  = ph_feat,
-            cat_idx  = cat_idx,
-            bank     = self.bank,
-            anchor_A = self.anchor_A,
-            dist     = self.opts.ssc_dist,
-            T        = self.opts.ssc_temp,
-            warmup   = self.opts.bank_warmup,
-            no_proto_grad = self.opts.no_proto_grad,
-        )
-
-        # L_asym_sph — frozen anchors (precomputed / on-the-fly)
-        with torch.no_grad():
-            sk_anchor = self._encode_frozen(sk)
-            ph_anchor = self._encode_frozen(img)
-
-        loss_sph = asym_spherical_loss(
-            sk_feat   = sk_feat,
-            ph_feat   = ph_feat,
-            sk_anchor = sk_anchor,
-            ph_anchor = ph_anchor,
-            l_sph_ph  = self.opts.sph_ph_weight,
-            l_sph_sk  = self.opts.sph_sk_weight,
-        )
+        if self.opts.sph_ph_weight > 0 or self.opts.sph_sk_weight > 0:
+            with torch.no_grad():
+                sk_anchor = self._encode_frozen(sk)
+                ph_anchor = self._encode_frozen(img)
+            loss_sph = asym_spherical_loss(
+                sk_feat   = sk_feat,
+                ph_feat   = ph_feat,
+                sk_anchor = sk_anchor,
+                ph_anchor = ph_anchor,
+                l_sph_ph  = self.opts.sph_ph_weight,
+                l_sph_sk  = self.opts.sph_sk_weight,
+            )
+        else:
+            loss_sph = sk_feat.new_zeros(())
 
         nt_xent_loss = nt_xent(sk_feat, ph_feat)
 
@@ -226,12 +230,22 @@ class SGSPLModel(pl.LightningModule):
         loss = (
             self.opts.triplet_weight * loss_tri
             + self.opts.classification_weight * loss_cls
-            + self.opts.ssc_weight * (loss_ssc + self.opts.xmod_weight * loss_xmod)
+            + self.opts.ssc_weight * loss_ssc
+            + self.opts.xmod_weight * loss_xmod
             + loss_sph
             + self.opts.nt_xent_weight * nt_xent_loss
         )
 
-        self.log('train_loss', loss, on_step=False, on_epoch=True)
+        self.log_dict({
+            'train_loss': loss,
+            'loss_triplet': loss_tri,
+            'loss_cls': loss_cls,
+            'loss_nt_xent': nt_xent_loss,
+            'loss_ssc': loss_ssc,
+            'loss_xmod': loss_xmod,
+            'loss_sph': loss_sph,
+            'active_prototypes': self.bank.proto_mask.sum().float(),
+        }, on_step=False, on_epoch=True)
 
         return loss
 
