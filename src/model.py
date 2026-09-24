@@ -56,19 +56,10 @@ class SGSPLModel(pl.LightningModule):
         clip_model, _ = clip.load(opts.clip_model, device='cpu')
         clip_model.requires_grad_(False)
 
-        if opts.independent_ln:
-            
-            self.clip_sk = clip_model
-            self.clip_ph = copy.deepcopy(clip_model)
-            freeze_all_but_ln(self.clip_sk.visual)
-            freeze_all_but_ln(self.clip_ph.visual)
-            print("[CLIP] separate_visual=True  → sk and ph have independent visual encoders")
-        else:
-            
-            self.clip_sk = clip_model
-            self.clip_ph = clip_model
-            freeze_all_but_ln(self.clip_sk.visual)
-            print("[CLIP] separate_visual=False → sk and ph share one visual encoder")
+        self.clip = clip_model
+        self.sketch_visual = copy.deepcopy(clip_model.visual)
+        freeze_all_but_ln(self.clip.visual)
+        freeze_all_but_ln(self.sketch_visual)
 
         # frozen clip for anchor + L_asym_sph
         self.clip_frozen = copy.deepcopy(clip_model)
@@ -131,15 +122,17 @@ class SGSPLModel(pl.LightningModule):
         # re-lock clip_frozen to eval
         self.clip_frozen.eval()
 
-
     def forward(self, images: torch.Tensor, modality: str) -> torch.Tensor:
         prompt = self.sk_prompt if modality == 'sketch' else self.img_prompt
         if prompt.shape[0] == 0:
             prompt = None
-            
-        clip_branch = self.clip_sk if modality == 'sketch' else self.clip_ph
-        feats  = clip_branch.encode_image(images, prompt=prompt.expand(images.shape[0], -1, -1))
-        feats  = feats.float()                          # fp32 for stable loss
+
+        if modality == 'sketch':
+            feats = self.sketch_visual(images.type(self.clip.dtype), prompt=prompt.expand(images.shape[0], -1, -1).type(self.clip.dtype))
+        else:
+            feats = self.clip.encode_image(images.type(self.clip.dtype), prompt=prompt.expand(images.shape[0], -1, -1).type(self.clip.dtype))
+
+        feats = feats.float()                          # fp32 for stable loss
         return F.normalize(feats, dim=-1)
 
     @torch.no_grad()
@@ -162,7 +155,7 @@ class SGSPLModel(pl.LightningModule):
         loss_tri = self.loss_tri(sk_feat, ph_feat, neg_feat)
 
         # L_cls — classification loss
-        logit_scale = self.clip_sk.logit_scale.exp()
+        logit_scale = self.clip.logit_scale.exp()
         loss_cls = classification_loss(
             sk_feat       = sk_feat,
             ph_feat       = ph_feat,
@@ -276,14 +269,12 @@ class SGSPLModel(pl.LightningModule):
         """
         prompt_params = [self.sk_prompt, self.img_prompt]
 
-        ln_params  = []
-        seen_p_ids = set()
-        for branch_visual in {id(self.clip_sk.visual): self.clip_sk.visual,
-                              id(self.clip_ph.visual): self.clip_ph.visual}.values():
-            for p in branch_visual.parameters():
-                if p.requires_grad and id(p) not in seen_p_ids:
-                    ln_params.append(p)
-                    seen_p_ids.add(id(p))
+        ln_params = [
+            parameter
+            for encoder in (self.clip.visual, self.sketch_visual)
+            for parameter in encoder.parameters()
+            if parameter.requires_grad
+        ]
 
         # self.clip.logit_scale.requires_grad_(True)
         # if not any(p is self.clip.logit_scale for p in ln_params):

@@ -5,10 +5,9 @@ Use the same model options that were used for training, for example:
     python experiments/evaluate.py \
         --ckpt_path checkpoints/SG-SPL/last.ckpt \
         --dataset sketchy_2 \
-        --root datasets/Sketchy/
+        --root datasets/Sketchy/ \
         --split zs \
-        --n_prompt 1 \
-        --independent_ln
+        --n_prompts 1
 """
 
 import os
