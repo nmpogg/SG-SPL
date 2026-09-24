@@ -1,21 +1,3 @@
-"""
-SG-SPL Lightning Module
-=======================
-Structure- & Geometry-regularized Prompt Learning for ZS-SBIR.
-
-Architecture:
-  - CLIP ViT-B/32 backbone (freeze all except LayerNorm, following CLIP-AT)
-  - Two learnable prompt vectors: sk_prompt [n_prompts, D], img_prompt [n_prompts, D]
-  - Frozen CLIP copy for text anchor + L_asym_sph reference
-  - EMA prototype bank for L_SSC and L_xmod
-
-Total loss:
-  L = L_triplet
-    + λ_cls  · L_cls
-    + λ_ssc  · (L_SSC + λ_x · L_xmod)
-    + L_asym_sph  (λ_ph and λ_sk are inside asym_spherical_loss)
-"""
-
 import copy
 import torch
 import torch.nn as nn

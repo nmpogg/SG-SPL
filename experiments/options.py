@@ -20,10 +20,6 @@ parser.add_argument('--split', type=str, default='zs',
 # Paths — adjust to your data location
 parser.add_argument('--root', type=str, default='datasets/Sketchy/',
                     help='Root of Sketchy-Extended: must contain sketch/ and photo/')
-# parser.add_argument('--tuberlin_dir', type=str, default='datasets/TUBerlin/',
-#                     help='Root of TU-Berlin-Extended: must contain sketches/ and images/')
-# parser.add_argument('--quickdraw_dir', type=str, default='datasets/QuickDraw/',
-#                     help='Root of QuickDraw-Extended: must contain sketches/ and images/')
 
 # DataLoader
 parser.add_argument('--batch_size', type=int, default=64)

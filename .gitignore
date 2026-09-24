@@ -1,3 +1,5 @@
-/doc
+/docs/*
+!/doc/CURRENT_RESULTS_AND_METHOD.md
 /logs
 __pycache__/
+reports/

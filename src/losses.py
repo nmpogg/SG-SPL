@@ -1,22 +1,3 @@
-"""
-SG-SPL Loss Functions
-=====================
-Ba thành phần regularizer giữ cấu trúc CLIP trong khi prompt tuning:
-
-  L = L_triplet + λ_cls·L_cls
-    + λ_ssc·(L_SSC + λ_x·L_xmod)
-    + λ_sph_ph·L_ph + λ_sph_sk·L_sk
-
-L_SSC     — Dual-modality Semantic Structure Consistency   (EBSeg → retrieval)
-L_xmod    — Cross-modal Structure Consistency              (novel contribution)
-L_asym_sph — Asymmetric Hyperspherical Anchoring           (PromptSRC → asymmetric)
-
-Tham khảo:
-  - EBSeg: Shan et al., CVPR 2024 (arxiv 2406.09829)
-  - PromptSRC: Khattak et al., ICCV 2023 (arxiv 2307.06948)
-  - Relational KD: Park et al., CVPR 2019
-"""
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
