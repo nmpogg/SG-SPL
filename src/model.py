@@ -5,7 +5,7 @@ import torch.nn.functional as F
 import pytorch_lightning as pl
 
 import clip
-from src.losses import build_text_anchor, PrototypeBank, classification_loss, structural_losses, asym_spherical_loss, nt_xent
+from src.losses import build_text_anchor, PrototypeBank, classification_loss, structural_losses, prototype_contrastive_loss, nt_xent
 from src.eval import compute_retrieval_metrics, get_metric_config
 
 # def freeze_all_but_ln(module):
@@ -61,7 +61,7 @@ class SGSPLModel(pl.LightningModule):
         freeze_all_but_ln(self.clip.visual)
         freeze_all_but_ln(self.sketch_visual)
 
-        # frozen clip for anchor + L_asym_sph
+        # Frozen CLIP supplies the text anchor.
         self.clip_frozen = copy.deepcopy(clip_model)
         self.clip_frozen.requires_grad_(False)
         self.clip_frozen.eval()
@@ -135,11 +135,6 @@ class SGSPLModel(pl.LightningModule):
         feats = feats.float()                          # fp32 for stable loss
         return F.normalize(feats, dim=-1)
 
-    @torch.no_grad()
-    def _encode_frozen(self, images: torch.Tensor) -> torch.Tensor:
-        feats = self.clip_frozen.encode_image(images, prompt=None)
-        return F.normalize(feats.float(), dim=-1)
-
     def training_step(self, batch, batch_idx):
         self._ensure_anchor()
 
@@ -164,7 +159,18 @@ class SGSPLModel(pl.LightningModule):
             logit_scale   = logit_scale,
         )
 
-        #  Update EMA prototype bank (no grad)
+        # Read the previous EMA state before this batch updates the bank.
+        loss_proto = prototype_contrastive_loss(
+            sk_feat=sk_feat,
+            ph_feat=ph_feat,
+            cat_idx=cat_idx,
+            bank=self.bank,
+            temperature=self.opts.proto_temp,
+            reverse_weight=self.opts.proto_reverse_weight,
+            warmup=self.opts.bank_warmup,
+        )
+
+        # Structural losses keep their existing update order and gradient path.
         self.bank.update(sk_feat.detach(),  cat_idx, modality='sk')
         self.bank.update(ph_feat.detach(), cat_idx, modality='ph')
 
@@ -181,20 +187,6 @@ class SGSPLModel(pl.LightningModule):
             no_proto_grad = self.opts.no_proto_grad,
         )
 
-        # L_asym_sph — frozen anchors (precomputed / on-the-fly)
-        with torch.no_grad():
-            sk_anchor = self._encode_frozen(sk)
-            ph_anchor = self._encode_frozen(img)
-
-        loss_sph = asym_spherical_loss(
-            sk_feat   = sk_feat,
-            ph_feat   = ph_feat,
-            sk_anchor = sk_anchor,
-            ph_anchor = ph_anchor,
-            l_sph_ph  = self.opts.sph_ph_weight,
-            l_sph_sk  = self.opts.sph_sk_weight,
-        )
-
         nt_xent_loss = nt_xent(sk_feat, ph_feat)
 
         # Total loss
@@ -202,11 +194,13 @@ class SGSPLModel(pl.LightningModule):
             self.opts.triplet_weight * loss_tri
             + self.opts.classification_weight * loss_cls
             + self.opts.ssc_weight * (loss_ssc + self.opts.xmod_weight * loss_xmod)
-            + loss_sph
+            + self.opts.proto_weight * loss_proto
             + self.opts.nt_xent_weight * nt_xent_loss
         )
 
         self.log('train_loss', loss, on_step=False, on_epoch=True)
+        self.log('train_loss_proto', loss_proto, on_step=False, on_epoch=True)
+        self.log('train_active_prototypes', self.bank.proto_mask.sum(), on_step=False, on_epoch=True)
 
         return loss
 

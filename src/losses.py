@@ -212,6 +212,45 @@ def structural_losses(
     return loss_ssc, loss_xmod
 
 
+def prototype_contrastive_loss(
+    sk_feat: torch.Tensor,
+    ph_feat: torch.Tensor,
+    cat_idx: torch.Tensor,
+    bank: PrototypeBank,
+    temperature: float = 0.07,
+    reverse_weight: float = 0.0,
+    warmup: int = 10,
+) -> torch.Tensor:
+    """Contrast current features against detached, previously stored EMA prototypes.
+
+    Only samples whose class already has a prototype participate. Call this
+    before updating the bank with the current batch to avoid self-targets.
+    """
+    active = bank.proto_mask.nonzero(as_tuple=True)[0]
+    if active.numel() < max(warmup, 2):
+        return sk_feat.sum() * 0.0
+
+    # searchsorted maps global class IDs to columns of the active matrix.
+    positions = torch.searchsorted(active, cat_idx)
+    valid = bank.proto_mask[cat_idx]
+    if not valid.any():
+        return sk_feat.sum() * 0.0
+
+    targets = positions[valid]
+    photo_teacher = F.normalize(bank.proto_ph[active].detach().float(), dim=-1)
+    sketch_student = F.normalize(sk_feat[valid].float(), dim=-1)
+    logits = sketch_student @ photo_teacher.t() / temperature
+    loss = F.cross_entropy(logits, targets)
+
+    if reverse_weight > 0:
+        sketch_teacher = F.normalize(bank.proto_sk[active].detach().float(), dim=-1)
+        photo_student = F.normalize(ph_feat[valid].float(), dim=-1)
+        reverse_logits = photo_student @ sketch_teacher.t() / temperature
+        loss = loss + reverse_weight * F.cross_entropy(reverse_logits, targets)
+
+    return loss
+
+
 
 # Asymmetric Hyperspherical Anchoring  L_asym_sph
 def asym_spherical_loss(
