@@ -65,11 +65,13 @@ parser.add_argument('--ssc_temp', type=float, default=0.1, help='Temperature T f
 # L_xmod — Cross-modal Structure Consistency
 parser.add_argument('--xmod_weight', type=float, default=0.5, help='Weight for L_xmod inside L_SSC term (set 0 to ablate xmod)')
 
-# L_asym_sph — Asymmetric Hyperspherical Anchoring
-parser.add_argument('--sph_ph_weight', type=float, default=1.0,
-                    help='lambda_ph: anchor weight for photo modality (stronger)')
-parser.add_argument('--sph_sk_weight', type=float, default=0.2,
-                    help='lambda_sk: anchor weight for sketch modality (weaker → let sketch adapt)')
+# Hybrid anchor: frozen photo CLIP plus sketch-to-photo EMA prototypes
+parser.add_argument('--sph_ph_weight', type=float, default=0.1,
+                    help='Weight for photo-to-frozen-photo anchoring (set 0 to disable)')
+parser.add_argument('--proto_weight', type=float, default=0.25,
+                    help='Weight for one-way sketch-to-photo prototype loss (set 0 to disable)')
+parser.add_argument('--proto_temp', type=float, default=0.07,
+                    help='Temperature for sketch-to-photo prototype logits')
 
 # L_NT-Xent — Normalized Temperature-scaled Cross Entropy
 parser.add_argument('--nt_xent_weight', type=float, default=0.5, help='Weight for L_NT-Xent (set 0 to disable)')
@@ -78,7 +80,7 @@ parser.add_argument('--nt_xent_weight', type=float, default=0.5, help='Weight fo
 parser.add_argument('--ema_m', type=float, default=0.9, 
                     help='EMA momentum for prototype bank update')
 parser.add_argument('--bank_warmup',type=int, default=10, 
-                    help='Minimum number of active prototypes before computing L_SSC/L_xmod')
+                    help='Minimum number of active prototypes before computing L_SSC/L_xmod/L_proto')
 parser.add_argument('--no_proto_grad', action='store_true', 
                     help='Stop gradient flow through prototype bank (ablation)')
 

@@ -68,7 +68,7 @@ def run():
     bank.update(ph_feats.detach(), cat_idx, 'ph')
     print(f'   active prototypes: {bank.proto_mask.sum().item()} / {n_seen}')
 
-    Psk, Pph, idx = bank.get_prototypes_with_grad(sk_feats, ph_feats, cat_idx)
+    Psk, Pph, idx = bank.get_prototypes(sk_feats, ph_feats, cat_idx)
     print(f'   prototype matrix shape: {Psk.shape}, active idx: {idx.tolist()}')
     print()
 
@@ -76,7 +76,7 @@ def run():
     print('[3] All loss functions...')
     from src.losses import (
         build_text_anchor, classification_loss,
-        structural_losses, asym_spherical_loss
+        structural_losses, prototype_contrastive_loss, photo_spherical_loss
     )
 
     # L_cls
@@ -92,7 +92,7 @@ def run():
     ph_f.retain_grad()
     cidx = torch.randint(0, n_seen, (B,), device=device)
 
-    loss_cls = classification_loss(sk_f, ph_f, cidx, text_emb)
+    loss_cls = classification_loss(sk_f, ph_f, cidx, text_emb, clip_model.logit_scale.exp())
     print(f'   L_cls = {loss_cls.item():.4f}  (should not be NaN)')
 
     # L_SSC + L_xmod
@@ -111,21 +111,22 @@ def run():
     print(f'   L_SSC  = {loss_ssc.item():.4f}')
     print(f'   L_xmod = {loss_xmod.item():.4f}')
 
-    # L_asym_sph
-    sk_anchor = F.normalize(torch.randn(B, embed_dim, device=device), dim=-1)
+    # Hybrid photo anchor and one-way prototype loss
     ph_anchor = F.normalize(torch.randn(B, embed_dim, device=device), dim=-1)
-    loss_sph = asym_spherical_loss(sk_f, ph_f, sk_anchor, ph_anchor, 1.0, 0.2)
-    print(f'   L_asym_sph = {loss_sph.item():.4f}')
+    loss_sph_ph = photo_spherical_loss(ph_f, ph_anchor)
+    loss_proto = prototype_contrastive_loss(sk_f, cidx, bank2, warmup=3)
+    print(f'   L_sph_ph = {loss_sph_ph.item():.4f}, L_proto = {loss_proto.item():.4f}')
 
     # Check no NaN
-    for name, val in [('cls', loss_cls), ('ssc', loss_ssc), ('xmod', loss_xmod), ('sph', loss_sph)]:
+    for name, val in [('cls', loss_cls), ('ssc', loss_ssc), ('xmod', loss_xmod),
+                      ('sph_ph', loss_sph_ph), ('proto', loss_proto)]:
         assert not torch.isnan(val), f'NaN in L_{name}!'
     print('   All losses finite: [OK]')
     print()
 
     # ————————————————————————————————————————————————————————————————————————————————————————————————
     print('[4] End-to-end gradient check...')
-    total_loss = loss_cls + loss_ssc + loss_xmod + loss_sph
+    total_loss = loss_cls + loss_ssc + loss_xmod + loss_sph_ph + loss_proto
     total_loss.backward()
     assert sk_f.grad is not None
     assert ph_f.grad is not None

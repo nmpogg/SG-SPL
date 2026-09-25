@@ -212,6 +212,44 @@ def structural_losses(
     return loss_ssc, loss_xmod
 
 
+def prototype_contrastive_loss(
+    sk_feat: torch.Tensor,
+    cat_idx: torch.Tensor,
+    bank: PrototypeBank,
+    temperature: float = 0.07,
+    warmup: int = 10,
+) -> torch.Tensor:
+    """Sketch-to-photo contrastive loss using photo EMA prototypes from prior batches.
+
+    Call before updating the bank. Only classes with a valid stored photo
+    prototype act as targets or negatives; unrepresented samples are skipped.
+    """
+    if temperature <= 0:
+        raise ValueError('temperature must be positive')
+
+    active_mask = bank.proto_mask & (bank.proto_ph.norm(dim=-1) > 0)
+    active = active_mask.nonzero(as_tuple=True)[0]
+    if active.numel() < max(warmup, 2):
+        return sk_feat.sum() * 0.0
+
+    valid = active_mask[cat_idx]
+    if not valid.any():
+        return sk_feat.sum() * 0.0
+
+    # active is sorted, so searchsorted gives the class column in the logits.
+    targets = torch.searchsorted(active, cat_idx[valid])
+    teacher = F.normalize(bank.proto_ph[active].detach().float(), dim=-1)
+    student = F.normalize(sk_feat[valid].float(), dim=-1)
+    return F.cross_entropy(student @ teacher.t() / temperature, targets)
+
+
+def photo_spherical_loss(ph_feat: torch.Tensor, ph_anchor: torch.Tensor) -> torch.Tensor:
+    """Mean one-minus-cosine distance to detached frozen photo features."""
+    student = F.normalize(ph_feat.float(), dim=-1)
+    teacher = F.normalize(ph_anchor.detach().float(), dim=-1)
+    return (1.0 - F.cosine_similarity(student, teacher, dim=-1)).mean()
+
+
 
 # Asymmetric Hyperspherical Anchoring  L_asym_sph
 def asym_spherical_loss(
