@@ -3,7 +3,7 @@ import glob
 import numpy as np
 from PIL import Image, ImageOps
 
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, Sampler
 from torchvision import transforms
 
 from src.splits import UNSEEN_CLASSES, GENERALIZED_CLASSES
@@ -59,6 +59,42 @@ class TrainDataset(Dataset):
         neg_tensor = self.transform(neg_data)
         
         return sk_tensor, pos_tensor, neg_tensor, self.seen_classes.index(cls)
+
+
+class UniqueClassBatchSampler(Sampler):
+    """Use every sketch once per epoch, with distinct classes in each batch."""
+
+    def __init__(self, dataset, batch_size):
+        self.batch_size = batch_size
+        self.indices_by_class = {}
+        for index, path in enumerate(dataset.all_sketches_path):
+            cls = os.path.basename(os.path.dirname(path))
+            self.indices_by_class.setdefault(cls, []).append(index)
+
+        if not 1 <= batch_size <= len(self.indices_by_class):
+            raise ValueError(
+                'batch_size must be between 1 and the number of non-empty seen classes '
+                f'({len(self.indices_by_class)}) for unique-class batches.'
+            )
+
+    def __iter__(self):
+        queues = {
+            cls: np.random.permutation(indices).tolist()
+            for cls, indices in self.indices_by_class.items()
+        }
+        active_classes = list(queues)
+        while active_classes:
+            # Prioritize longer queues to minimize small batches; shuffle ties.
+            np.random.shuffle(active_classes)
+            active_classes.sort(key=lambda cls: len(queues[cls]), reverse=True)
+            batch = [queues[cls].pop() for cls in active_classes[:self.batch_size]]
+            np.random.shuffle(batch)
+            yield batch
+            active_classes = [cls for cls in active_classes if queues[cls]]
+
+    def __len__(self):
+        counts = [len(indices) for indices in self.indices_by_class.values()]
+        return max(max(counts), (sum(counts) + self.batch_size - 1) // self.batch_size)
 
 
 class ValDataset(Dataset):

@@ -14,7 +14,7 @@ from torch.utils.data import DataLoader
 
 from experiments.options import parser
 from src.model import SGSPLModel
-from src.dataset_retrieval import TrainDataset, ValDataset
+from src.dataset_retrieval import TrainDataset, ValDataset, UniqueClassBatchSampler
 from src.utils import CustomProgressBar
 
 
@@ -31,8 +31,7 @@ def main():
 
     train_loader = DataLoader(
         dataset = train_ds,
-        batch_size = opts.batch_size,
-        shuffle = True,
+        batch_sampler = UniqueClassBatchSampler(train_ds, opts.batch_size),
         num_workers = opts.num_workers
     )
 
