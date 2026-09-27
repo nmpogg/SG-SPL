@@ -186,13 +186,11 @@ class SGSPLModel(pl.LightningModule):
             sk_anchor = self._encode_frozen(sk)
             ph_anchor = self._encode_frozen(img)
 
-        loss_sph = asym_spherical_loss(
+        loss_sph_ph, loss_sph_sk = asym_spherical_loss(
             sk_feat   = sk_feat,
             ph_feat   = ph_feat,
             sk_anchor = sk_anchor,
             ph_anchor = ph_anchor,
-            l_sph_ph  = self.opts.sph_ph_weight,
-            l_sph_sk  = self.opts.sph_sk_weight,
         )
 
         nt_xent_loss = nt_xent(sk_feat, ph_feat)
@@ -202,7 +200,7 @@ class SGSPLModel(pl.LightningModule):
             self.opts.triplet_weight * loss_tri
             + self.opts.classification_weight * loss_cls
             + self.opts.ssc_weight * (loss_ssc + self.opts.xmod_weight * loss_xmod)
-            + loss_sph
+            + self.opts.sph_ph_weight * loss_sph_ph + self.opts.sph_sk_weight * loss_sph_sk
             + self.opts.nt_xent_weight * nt_xent_loss
         )
 

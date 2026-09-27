@@ -219,8 +219,6 @@ def asym_spherical_loss(
     ph_feat:    torch.Tensor,   # [B, D] — prompted photo features
     sk_anchor:  torch.Tensor,   # [B, D] — frozen CLIP sketch features (no grad)
     ph_anchor:  torch.Tensor,   # [B, D] — frozen CLIP photo features  (no grad)
-    l_sph_ph:   float = 1.0,    # λ_ph   — pull photo strongly (in-distribution)
-    l_sph_sk:   float = 0.2,    # λ_sk   — pull sketch weakly  (out-of-distribution)
 ) -> torch.Tensor:
     """
     L_asym_sph = λ_ph · E_x[1 − cos(f_ph(x), f_frozen(x))]
@@ -244,7 +242,7 @@ def asym_spherical_loss(
     l_ph = (1.0 - F.cosine_similarity(ph_feat_n, ph_anchor_n)).mean()
     l_sk = (1.0 - F.cosine_similarity(sk_feat_n, sk_anchor_n)).mean()
 
-    return l_sph_ph * l_ph + l_sph_sk * l_sk
+    return l_ph, l_sk
 
 
 def nt_xent(features_view1: torch.Tensor, features_view2: torch.Tensor):
