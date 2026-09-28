@@ -218,20 +218,16 @@ def asym_spherical_loss(
     sk_feat:    torch.Tensor,   # [B, D] — prompted sketch features
     ph_feat:    torch.Tensor,   # [B, D] — prompted photo features
     sk_anchor:  torch.Tensor,   # [B, D] — frozen CLIP sketch features (no grad)
-    ph_anchor:  torch.Tensor,   # [B, D] — frozen CLIP photo features  (no grad)
-) -> torch.Tensor:
+    ph_anchor:  torch.Tensor,   # [B, D] — frozen text features of photo classes (no grad)
+) -> tuple[torch.Tensor, torch.Tensor]:
     """
-    L_asym_sph = λ_ph · E_x[1 − cos(f_ph(x), f_frozen(x))]
-               + λ_sk · E_x[1 − cos(f_sk(x), f_frozen(x))]
+    Return the unweighted photo and sketch anchoring losses:
+      L_ph = E_x[1 − cos(f_ph(x), w_frozen(y))]
+      L_sk = E_x[1 − cos(f_sk(x), f_frozen(x))]
 
-    Asymmetry rationale:
-      - CLIP was pretrained on natural images → frozen photo anchor is reliable → pull hard
-      - CLIP rarely saw hand-drawn sketches → frozen sketch anchor is unreliable → pull lightly
-        (pulling too hard would prevent the sketch encoder from adapting)
-
-    Difference from PromptSRC:
-      PromptSRC: symmetric, per-sample, single-modal classification.
-      SG-SPL:    asymmetric by modality, for cross-modal retrieval.
+    Photo features use the precomputed frozen text embedding of their class.
+    Sketch features remain anchored to their own frozen CLIP image features.
+    The caller applies separate weights to these two losses.
     """
     # Normalise all features to unit sphere (cosine similarity = dot product)
     sk_feat_n   = F.normalize(sk_feat.float(),   dim=-1)

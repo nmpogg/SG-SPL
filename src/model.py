@@ -181,10 +181,10 @@ class SGSPLModel(pl.LightningModule):
             no_proto_grad = self.opts.no_proto_grad,
         )
 
-        # L_asym_sph — frozen anchors (precomputed / on-the-fly)
+        # L_asym_sph — frozen sketch feature and precomputed class text feature
         with torch.no_grad():
             sk_anchor = self._encode_frozen(sk)
-            ph_anchor = self._encode_frozen(img)
+            ph_anchor = self.text_emb_seen[cat_idx]
 
         loss_sph_ph, loss_sph_sk = asym_spherical_loss(
             sk_feat   = sk_feat,
