@@ -217,30 +217,16 @@ def structural_losses(
 def asym_spherical_loss(
     sk_feat:    torch.Tensor,   # [B, D] — prompted sketch features
     ph_feat:    torch.Tensor,   # [B, D] — prompted photo features
-    sk_anchor:  torch.Tensor,   # [B, D] — frozen CLIP sketch features (no grad)
-    ph_anchor:  torch.Tensor,   # [B, D] — frozen CLIP photo features  (no grad)
-) -> torch.Tensor:
-    """
-    L_asym_sph = λ_ph · E_x[1 − cos(f_ph(x), f_frozen(x))]
-               + λ_sk · E_x[1 − cos(f_sk(x), f_frozen(x))]
-
-    Asymmetry rationale:
-      - CLIP was pretrained on natural images → frozen photo anchor is reliable → pull hard
-      - CLIP rarely saw hand-drawn sketches → frozen sketch anchor is unreliable → pull lightly
-        (pulling too hard would prevent the sketch encoder from adapting)
-
-    Difference from PromptSRC:
-      PromptSRC: symmetric, per-sample, single-modal classification.
-      SG-SPL:    asymmetric by modality, for cross-modal retrieval.
-    """
-    # Normalise all features to unit sphere (cosine similarity = dot product)
+    text_anchor:  torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor]:
+    
+    # norm
     sk_feat_n   = F.normalize(sk_feat.float(),   dim=-1)
     ph_feat_n   = F.normalize(ph_feat.float(),   dim=-1)
-    sk_anchor_n = F.normalize(sk_anchor.float(), dim=-1)
-    ph_anchor_n = F.normalize(ph_anchor.float(), dim=-1)
+    text_anchor_n = F.normalize(text_anchor.float(), dim=-1)
 
-    l_ph = (1.0 - F.cosine_similarity(ph_feat_n, ph_anchor_n)).mean()
-    l_sk = (1.0 - F.cosine_similarity(sk_feat_n, sk_anchor_n)).mean()
+    l_ph = (1.0 - F.cosine_similarity(ph_feat_n, text_anchor_n)).mean()
+    l_sk = (1.0 - F.cosine_similarity(sk_feat_n, text_anchor_n)).mean()
 
     return l_ph, l_sk
 

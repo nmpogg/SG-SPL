@@ -135,10 +135,10 @@ class SGSPLModel(pl.LightningModule):
         feats = feats.float()                          # fp32 for stable loss
         return F.normalize(feats, dim=-1)
 
-    @torch.no_grad()
-    def _encode_frozen(self, images: torch.Tensor) -> torch.Tensor:
-        feats = self.clip_frozen.encode_image(images, prompt=None)
-        return F.normalize(feats.float(), dim=-1)
+    # @torch.no_grad()
+    # def _encode_frozen(self, images: torch.Tensor) -> torch.Tensor:
+    #     feats = self.clip_frozen.encode_image(images, prompt=None)
+    #     return F.normalize(feats.float(), dim=-1)
 
     def training_step(self, batch, batch_idx):
         self._ensure_anchor()
@@ -181,16 +181,15 @@ class SGSPLModel(pl.LightningModule):
             no_proto_grad = self.opts.no_proto_grad,
         )
 
-        # L_asym_sph — frozen anchors (precomputed / on-the-fly)
-        with torch.no_grad():
-            sk_anchor = self._encode_frozen(sk)
-            ph_anchor = self._encode_frozen(img)
-
+        # L_asym_sph — frozen sketch feature and precomputed class text feature
+        # with torch.no_grad():
+        #     sk_anchor = self._encode_frozen(sk)
+        #     ph_anchor = self.text_emb_seen[cat_idx]
+        text_anchor = self.text_emb_seen[cat_idx]
         loss_sph_ph, loss_sph_sk = asym_spherical_loss(
             sk_feat   = sk_feat,
             ph_feat   = ph_feat,
-            sk_anchor = sk_anchor,
-            ph_anchor = ph_anchor,
+            text_anchor = text_anchor
         )
 
         nt_xent_loss = nt_xent(sk_feat, ph_feat)
