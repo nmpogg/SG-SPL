@@ -24,6 +24,8 @@ parser.add_argument('--root', type=str, default='datasets/Sketchy/',
 # DataLoader
 parser.add_argument('--batch_size', type=int, default=64)
 parser.add_argument('--test_batch_size', type=int, default=256)
+parser.add_argument('--fast_eval', action='store_true',
+                    help='Compute retrieval metrics in query batches during validation/evaluation')
 parser.add_argument('--num_workers',type=int, default=4)
 parser.add_argument('--image_size', type=int, default=224)
 
