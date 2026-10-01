@@ -6,7 +6,7 @@ import pytorch_lightning as pl
 
 import clip
 from src.losses import build_text_anchor, PrototypeBank, classification_loss, structural_losses, asym_spherical_loss, nt_xent
-from src.eval import compute_retrieval_metrics, get_metric_config
+from src.eval import compute_retrieval_metrics, compute_retrieval_metrics_batched, get_metric_config
 
 # def freeze_all_but_ln(module):
 #     """Freeze an encoder, then enable only its LayerNorm parameters."""
@@ -231,12 +231,15 @@ class SGSPLModel(pl.LightningModule):
         metric_cfg = get_metric_config(self.opts.dataset)
 
         # ZS/GZS-SBIR
-        metrics = compute_retrieval_metrics(
+        metric_fn = compute_retrieval_metrics_batched if self.opts.fast_eval else compute_retrieval_metrics
+        metric_kwargs = {'batch_size': self.opts.test_batch_size} if self.opts.fast_eval else {}
+        metrics = metric_fn(
             sk_feats  = sk_feats,
             ph_feats  = ph_feats,
             sk_labels = sk_labels,
             ph_labels = ph_labels,
             **metric_cfg,
+            **metric_kwargs,
         )
         map_k = metric_cfg['map_k']
         prec_k = metric_cfg['prec_k']

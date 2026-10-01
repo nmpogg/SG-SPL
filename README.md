@@ -1,5 +1,13 @@
 # SG-SPL
 
+## Fast evaluation
+
+Add `--fast_eval` to `experiments/train.py` or `experiments/evaluate.py` to compute retrieval metrics for a batch of sketch queries at once. `--test_batch_size` controls the query batch size as well as the validation DataLoader batch size. Without the flag, evaluation uses the original per-sketch metric function.
+
+```bash
+python experiments/evaluate.py --ckpt_path checkpoints/SG-SPL/last.ckpt --fast_eval
+```
+
 ## Chạy CLIP-AT baseline
 
 Lệnh sau chạy CLIP-AT kiểu prompt tuning với chỉ `L_triplet` + `L_cls`, vô hiệu hoá các regularizer bổ sung:
