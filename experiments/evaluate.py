@@ -8,10 +8,16 @@ Use the same model options that were used for training, for example:
         --root datasets/Sketchy/ \
         --split zs \
         --n_prompts 1
+
+For cross-dataset evaluation, --dataset/--root/--split select the target
+dataset. Add --train_dataset and --train_root for the source dataset used
+to recover the checkpoint's seen class names. Model options must still
+match those used for training.
 """
 
 import os
 import sys
+from copy import deepcopy
 
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
 if ROOT_DIR not in sys.path:
@@ -27,6 +33,15 @@ from src.utils import CustomProgressBar
 
 
 def main():
+    parser.add_argument(
+        '--train_dataset', default=None,
+        choices=['sketchy_1', 'sketchy_2', 'tuberlin', 'quickdraw'],
+        help='Source training dataset for seen class names (default: --dataset)',
+    )
+    parser.add_argument(
+        '--train_root', default=None,
+        help='Source training data root for seen class names (default: --root)',
+    )
     opts = parser.parse_args()
 
     if not opts.ckpt_path:
@@ -36,7 +51,10 @@ def main():
 
     pl.seed_everything(opts.seed, workers=True)
 
-    train_ds = TrainDataset(opts)
+    train_opts = deepcopy(opts)
+    train_opts.dataset = opts.train_dataset or opts.dataset
+    train_opts.root = opts.train_root or opts.root
+    train_ds = TrainDataset(train_opts)
     val_sk_ds = ValDataset(opts, modality='sketch')
     val_ph_ds = ValDataset(opts, modality='photo')
 
